@@ -3,6 +3,11 @@
 ADraw is a Windows desktop editor for ANSI art. Draw with character brushes,
 type directly on the canvas, and add lettering with TheDraw fonts.
 
+![ADraw displaying its application icon as truecolor ANSI artwork](docs/images/adraw-screenshot.jpg)
+
+The icon recreated as 64 x 36 truecolor ANSI art.
+[Open the example in ADraw](examples/adraw-icon.ans).
+
 ## Get started
 
 1. Download and run the Windows installer from the
@@ -34,6 +39,7 @@ a SmartScreen warning; download from the official release page.
 ## Learn more
 
 - **[User guide](USER_GUIDE.md):** detailed instructions and file compatibility.
+- [Changelog](CHANGELOG.md): unreleased changes and release history.
 - [Developer guide](https://github.com/mikehodgson/adraw/blob/main/DEVELOPERS.md):
   source builds, testing, architecture, and credits.
 

@@ -65,6 +65,16 @@ Release artifacts are currently unsigned.
 
 ### Publish a version
 
+Version increases, version tags, and release publication require an explicit
+user request. Committing or pushing ordinary changes to `main` must not bump
+the version or create a release; record those changes under **Unreleased** in
+[CHANGELOG.md](CHANGELOG.md).
+
+For an authorized release, follow the changelog policy in
+[AGENTS.md](AGENTS.md): move the completed Unreleased entries into a heading
+for the new version and actual release date, retain the Unreleased section,
+and update the comparison links.
+
 Both crate versions inherit `workspace.package.version` in
 [Cargo.toml](Cargo.toml). Update that version, run the validation commands below
 to refresh and check the lockfile, and commit the changes to `main`. Then:
@@ -223,6 +233,7 @@ its ANSI/indexed/RGB representation until the user edits it.
 
 - [README.md](README.md): quick start and main feature overview.
 - [USER_GUIDE.md](USER_GUIDE.md): detailed editing and file workflows.
+- [CHANGELOG.md](CHANGELOG.md): notable unreleased changes and release history.
 - [AGENTS.md](AGENTS.md): contributor/agent rules.
 - [Copilot instructions](.github/copilot-instructions.md): architecture guidance.
 
