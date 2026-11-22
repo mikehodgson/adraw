@@ -1,0 +1,13 @@
+ADraw's Rust source is licensed under the MIT license (LICENSE / LICENSE.txt).
+
+The bundled IBM VGA 9x16 font assets are from The Ultimate Oldschool PC Font
+Pack v2.2, copyright 2016-2020 VileR, licensed under Creative Commons
+Attribution-ShareAlike 4.0 International.
+https://int10h.org/oldschool-pc-fonts/fontlist/font?ibm_vga_9x16
+https://creativecommons.org/licenses/by-sa/4.0/
+
+The bitmap asset derives the CP437 glyphs from that font for pixel-aligned
+rendering, including VGA's ninth-column line-graphics behavior.
+The full font license is in crates/ansi_editor/assets/LICENSE-IBM-VGA.txt
+in the source repository, or LICENSE-IBM-VGA.txt in Windows distributions.
+The font license applies to the font assets, not to ADraw's Rust source.

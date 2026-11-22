@@ -1,0 +1,59 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)]
+    [string]$Installer,
+    [Parameter(Mandatory)]
+    [string]$PortableZip
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$registryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B97FA13A-0923-4C24-A6D5-7F5276293F19}_is1'
+if (Test-Path -LiteralPath $registryKey) {
+    throw 'An ADraw installation already exists; do not run the smoke test against shared installer registration.'
+}
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('adraw-installer-test-' + [guid]::NewGuid().ToString('N'))
+$installDirectory = Join-Path $testRoot 'installed'
+$portableDirectory = Join-Path $testRoot 'portable'
+$uninstaller = Join-Path $installDirectory 'unins000.exe'
+$installed = $false
+New-Item -ItemType Directory -Path $testRoot | Out-Null
+try {
+    Expand-Archive -LiteralPath $PortableZip -DestinationPath $portableDirectory
+    $process = Start-Process -FilePath $Installer -ArgumentList @(
+        '/VERYSILENT', '/SUPPRESSMSGBOXES', '/SP-', '/NORESTART', '/NOICONS',
+        "/DIR=`"$installDirectory`"", "/LOG=`"$(Join-Path $testRoot 'install.log')`""
+    ) -Wait -PassThru
+    $installed = Test-Path -LiteralPath $uninstaller
+    if ($process.ExitCode -ne 0 -or -not $installed) {
+        throw "Installer smoke test failed (exit $($process.ExitCode))."
+    }
+    foreach ($file in @('adraw.exe', 'README.md', 'USER_GUIDE.md', 'NOTICE.txt', 'LICENSE.txt', 'LICENSE-IBM-VGA.txt')) {
+        $copied = Get-FileHash -LiteralPath (Join-Path $installDirectory $file) -Algorithm SHA256
+        $portable = Get-FileHash -LiteralPath (Join-Path $portableDirectory $file) -Algorithm SHA256
+        if ($copied.Hash -ne $portable.Hash) { throw "Installer payload differs from ZIP: $file" }
+    }
+    $version = (Get-Item -LiteralPath (Join-Path $installDirectory 'adraw.exe')).VersionInfo.ProductVersion
+    if ((Get-ItemProperty -LiteralPath $registryKey).DisplayVersion -ne $version) {
+        throw 'Installer registration and executable product versions differ.'
+    }
+    $artwork = Join-Path $installDirectory 'user-artwork.ans'
+    Set-Content -LiteralPath $artwork -Value 'Saved artwork' -Encoding ascii
+    $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+    if ($process.ExitCode -ne 0 -or (Test-Path -LiteralPath (Join-Path $installDirectory 'adraw.exe')) -or (Test-Path -LiteralPath $registryKey)) {
+        throw "Uninstaller smoke test failed (exit $($process.ExitCode))."
+    }
+    if (-not (Test-Path -LiteralPath $artwork) -or (Get-Content -LiteralPath $artwork -Raw).Trim() -ne 'Saved artwork') {
+        throw 'Uninstall removed or changed user artwork.'
+    }
+    $installed = $false
+    Write-Host "Installer payload, version $version, installation, uninstallation, and artwork preservation verified."
+}
+finally {
+    if ($installed -and (Test-Path -LiteralPath $uninstaller)) {
+        $cleanup = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+        if ($cleanup.ExitCode -ne 0) { throw "Test installation cleanup failed; inspect $testRoot." }
+    }
+    Remove-Item -LiteralPath $testRoot -Recurse -Force
+}

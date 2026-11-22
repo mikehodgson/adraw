@@ -1,0 +1,16 @@
+[package]
+name = "adraw"
+version.workspace = true
+edition.workspace = true
+license = "MIT AND CC-BY-SA-4.0"
+
+[dependencies]
+ansi_core = { path = "../ansi_core" }
+eframe = { version = "0.31", features = ["persistence"] }
+egui_material_icons = "0.3"
+rfd = "0.15"
+tempfile = "3"
+
+[build-dependencies]
+winresource = "0.1"
+
