@@ -10,7 +10,6 @@ type directly on the canvas, and add lettering with TheDraw fonts.
 1. Download the package for your system from the
    **[latest release](https://github.com/mikehodgson/adraw/releases/latest)**:
    Windows installer/portable ZIP, Linux archive, or macOS app archive.
-   Linux and macOS packages will be available starting with the next release.
 2. Choose **File > New image** to start an **80 x 25** canvas.
 3. Pick a character and colors in the sidebar. **Left-click** a color for
    foreground; **right-click** for background.

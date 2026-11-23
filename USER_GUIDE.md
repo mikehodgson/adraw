@@ -11,7 +11,7 @@ your saved artwork, preferences, and imported fonts intact.
 The portable ZIP requires no installation; extract it and run `adraw.exe`.
 Both distributions include the display font, documentation, and license notices.
 
-Linux and macOS packages start with the next release after 0.2.0:
+Linux and macOS packages are available from 0.3.0:
 
 - **Linux:** choose `linux-x64` or `linux-arm64`, extract the `.tar.gz`,
   and run `./adraw` from the extracted directory. Use Ubuntu 22.04 or a
