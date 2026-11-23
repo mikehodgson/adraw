@@ -1,0 +1,147 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - platform: macos-x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - platform: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 \
+            libxcursor1 libxi6 libxrandr2 xvfb xauth dbus-x11
+      - name: Install Rust
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.100.0 --profile minimal --component rustfmt --target "$TARGET"
+          rustup default 1.100.0
+      - name: Validate
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo test --locked --workspace --target "$TARGET"
+          cargo check --locked --workspace --target "$TARGET"
+      - name: Build Windows installer and portable ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = & .\packaging\Get-InnoSetup.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'innosetup')
+          & .\packaging\Build-Release.ps1 -InnoCompiler $compiler
+      - name: Smoke-test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem .\target\dist\*-setup.exe
+          $zip = Get-ChildItem .\target\dist\*.zip
+          & .\packaging\Test-Installer.ps1 -Installer $installer.FullName -PortableZip $zip.FullName
+      - name: Build Unix package
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash packaging/build-unix-release.sh "$TARGET"
+      - name: Smoke-test Unix package
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/adraw-smoke"
+          cd target/dist
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            shasum -a 256 --check SHA256SUMS.txt
+          else
+            sha256sum --check SHA256SUMS.txt
+          fi
+          tar -xzf ./*.tar.gz -C "$RUNNER_TEMP/adraw-smoke"
+          cd "$RUNNER_TEMP/adraw-smoke"/adraw-*
+          test -s README.md && test -s USER_GUIDE.md && test -s CHANGELOG.md
+          test -s LICENSE.txt && test -s LICENSE-IBM-VGA.txt && test -s NOTICE.txt
+          test -s docs/images/adraw-screenshot.jpg && test -s examples/adraw-icon.ans
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            plutil -lint ADraw.app/Contents/Info.plist
+            test -s ADraw.app/Contents/Resources/adraw.icns
+            codesign --verify --deep --strict ADraw.app
+            if [[ "$PLATFORM" == macos-arm64 ]]; then arch=arm64; else arch=x86_64; fi
+            lipo -verify_arch "$arch" ADraw.app/Contents/MacOS/adraw
+            otool -L ADraw.app/Contents/MacOS/adraw
+            ADraw.app/Contents/MacOS/adraw > launch.log 2>&1 &
+            pid=$!
+            trap 'kill "$pid" 2>/dev/null || true' EXIT
+            sleep 15
+            cat launch.log
+            kill -0 "$pid"
+            kill "$pid"
+            wait "$pid" || status=$?
+            if [[ "${status:-0}" != 0 && "${status:-0}" != 143 ]]; then exit "$status"; fi
+            trap - EXIT
+          else
+            test -x adraw
+            ldd adraw | tee dependencies.txt
+            if grep -q 'not found' dependencies.txt; then exit 1; fi
+            mkdir -m 700 "$RUNNER_TEMP/adraw-runtime"
+            export XDG_RUNTIME_DIR="$RUNNER_TEMP/adraw-runtime"
+            set +e
+            xvfb-run -a env -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 \
+              timeout --kill-after=5s 15s ./adraw > launch.log 2>&1
+            status=$?
+            set -e
+            cat launch.log
+            if [[ "$status" != 124 ]]; then
+              echo "Expected the editor to stay running; launch status: $status" >&2
+              exit 1
+            fi
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            target/dist/*-setup.exe
+            target/dist/*.zip
+            target/dist/*.tar.gz
+            target/dist/SHA256SUMS.txt
+          if-no-files-found: error

@@ -9,6 +9,20 @@ requested.
 
 ## [Unreleased]
 
+### Added
+
+- Linux x64/ARM64 and macOS Intel/Apple Silicon binary packages, with native
+  CI tests and package launch checks. Version-tag releases include all platforms
+  and combined SHA-256 checksums.
+
+### Changed
+
+- Keyboard shortcuts and their labels use Command on macOS and Ctrl on
+  Windows/Linux, including Command+Shift+Z for macOS redo; application-data
+  messages and bundled-font startup are portable.
+- Smaller release executables through size-focused optimization, ThinLTO,
+  a single codegen unit, and symbol stripping, without removing application features.
+
 ## [0.2.0] - 2026-11-23
 
 ### Added

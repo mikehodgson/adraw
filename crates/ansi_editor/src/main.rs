@@ -28,6 +28,14 @@ const APP_ICON_PNG: &[u8] = include_bytes!("../assets/adraw.png");
 const GITHUB_PAGE: &str = "https://github.com/mikehodgson/adraw";
 const ZOOM_LEVELS: [u16; 8] = [50, 75, 100, 125, 150, 200, 300, 400];
 const DEFAULT_ZOOM_PERCENT: f32 = 100.0;
+const REDO_SHORTCUT: egui::KeyboardShortcut = if cfg!(target_os = "macos") {
+    egui::KeyboardShortcut::new(
+        egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+        egui::Key::Z,
+    )
+} else {
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y)
+};
 
 const PALETTE: [[u8; 3]; 16] = [
     [0, 0, 0],
@@ -277,7 +285,7 @@ impl Editor {
             }
         } else {
             editor.message = Some(
-                "Sidebar preferences cannot be saved: application settings storage is unavailable. Check access to your Windows profile's application data folder."
+                "Sidebar preferences cannot be saved: application settings storage is unavailable. Check access to your user profile's application data folder."
                     .into(),
             );
         }
@@ -335,7 +343,12 @@ impl Editor {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled_ui(self.zoom_percent > 50.0, |ui| {
-                        icon_button(ui, ICON_ZOOM_OUT, "Zoom out (Ctrl+-)", false)
+                        icon_button(
+                            ui,
+                            ICON_ZOOM_OUT,
+                            &format!("Zoom out ({})", shortcut_text(ui.ctx(), egui::Key::Minus)),
+                            false,
+                        )
                     })
                     .inner
                     .clicked()
@@ -349,7 +362,12 @@ impl Editor {
                 }
                 if ui
                     .add_enabled_ui(self.zoom_percent < 400.0, |ui| {
-                        icon_button(ui, ICON_ZOOM_IN, "Zoom in (Ctrl++)", false)
+                        icon_button(
+                            ui,
+                            ICON_ZOOM_IN,
+                            &format!("Zoom in ({})", shortcut_text(ui.ctx(), egui::Key::Plus)),
+                            false,
+                        )
                     })
                     .inner
                     .clicked()
@@ -359,7 +377,10 @@ impl Editor {
                 if icon_button(
                     ui,
                     ICON_CENTER_FOCUS_STRONG,
-                    "Actual size (100%, Ctrl+0)",
+                    &format!(
+                        "Actual size (100%, {})",
+                        shortcut_text(ui.ctx(), egui::Key::Num0)
+                    ),
                     false,
                 )
                 .clicked()
@@ -1247,10 +1268,24 @@ impl Editor {
                         self.selecting = true;
                     }
                     ui.separator();
-                    if icon_button(ui, ICON_CONTENT_COPY, "Copy (Ctrl+C)", false).clicked() {
+                    if icon_button(
+                        ui,
+                        ICON_CONTENT_COPY,
+                        &format!("Copy ({})", shortcut_text(ui.ctx(), egui::Key::C)),
+                        false,
+                    )
+                    .clicked()
+                    {
                         *clipboard_action = Some(false);
                     }
-                    if icon_button(ui, ICON_CONTENT_CUT, "Cut (Ctrl+X)", false).clicked() {
+                    if icon_button(
+                        ui,
+                        ICON_CONTENT_CUT,
+                        &format!("Cut ({})", shortcut_text(ui.ctx(), egui::Key::X)),
+                        false,
+                    )
+                    .clicked()
+                    {
                         *clipboard_action = Some(true);
                     }
                     let mut character = self.brush.ch.to_string();
@@ -1277,7 +1312,10 @@ impl Editor {
                     }
                 })
                 .response
-                .on_hover_text("Paste at the canvas cursor with Ctrl+V");
+                .on_hover_text(format!(
+                    "Paste at the canvas cursor with {}",
+                    shortcut_text(ui.ctx(), egui::Key::V)
+                ));
             }
             SidebarSection::Zoom => self.zoom_controls(ui),
             SidebarSection::Colors => {
@@ -1362,23 +1400,24 @@ impl Editor {
     fn ui(&mut self, ctx: &egui::Context) {
         if !self.about_open && self.selection_drag.is_none() {
             if ctx.input_mut(|input| {
-                input.consume_key(egui::Modifiers::CTRL, egui::Key::Plus)
-                    || input.consume_key(egui::Modifiers::CTRL, egui::Key::Equals)
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Plus)
+                    || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Equals)
                     || input.consume_key(
-                        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
                         egui::Key::Plus,
                     )
                     || input.consume_key(
-                        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
                         egui::Key::Equals,
                     )
             }) {
                 self.change_zoom(1);
             }
-            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Minus)) {
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Minus))
+            {
                 self.change_zoom(-1);
             }
-            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Num0)) {
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Num0)) {
                 self.zoom_percent = DEFAULT_ZOOM_PERCENT;
             }
         }
@@ -1386,17 +1425,19 @@ impl Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending = Some(PendingAction::Close);
         }
-        if !self.about_open
-            && self.selection_drag.is_none()
-            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Z))
-        {
-            self.undo();
-        }
-        if !self.about_open
-            && self.selection_drag.is_none()
-            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Y))
-        {
-            self.redo();
+        if !self.about_open && self.selection_drag.is_none() {
+            if ctx.input_mut(|input| {
+                input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                ) || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
+            }) {
+                self.redo();
+            } else if ctx
+                .input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
+            {
+                self.undo();
+            }
         }
         let mut clipboard_action = None;
         let mut focus_canvas = false;
@@ -1476,14 +1517,14 @@ impl Editor {
                 });
                 ui.menu_button("Edit", |ui| {
                     if ui
-                        .add(egui::Button::new("Undo").shortcut_text("Ctrl+Z"))
+                        .add(egui::Button::new("Undo").shortcut_text(shortcut_text(ctx, egui::Key::Z)))
                         .clicked()
                     {
                         ui.close_menu();
                         self.undo();
                     }
                     if ui
-                        .add(egui::Button::new("Redo").shortcut_text("Ctrl+Y"))
+                        .add(egui::Button::new("Redo").shortcut_text(ctx.format_shortcut(&REDO_SHORTCUT)))
                         .clicked()
                     {
                         ui.close_menu();
@@ -1491,12 +1532,12 @@ impl Editor {
                     }
                     ui.separator();
                     for (cut, label, shortcut) in
-                        [(true, "Cut", "Ctrl+X"), (false, "Copy", "Ctrl+C")]
+                        [(true, "Cut", egui::Key::X), (false, "Copy", egui::Key::C)]
                     {
                         if ui
                             .add_enabled(
                                 self.selection.is_some(),
-                                egui::Button::new(label).shortcut_text(shortcut),
+                                egui::Button::new(label).shortcut_text(shortcut_text(ctx, shortcut)),
                             )
                             .clicked()
                         {
@@ -1505,7 +1546,7 @@ impl Editor {
                         }
                     }
                     if ui
-                        .add(egui::Button::new("Paste").shortcut_text("Ctrl+V"))
+                        .add(egui::Button::new("Paste").shortcut_text(shortcut_text(ctx, egui::Key::V)))
                         .clicked()
                     {
                         ui.close_menu();
@@ -1562,7 +1603,7 @@ impl Editor {
                     if ui
                         .add_enabled(
                             self.selection_drag.is_none() && self.zoom_percent < 400.0,
-                            egui::Button::new("Zoom in").shortcut_text("Ctrl++"),
+                            egui::Button::new("Zoom in").shortcut_text(shortcut_text(ctx, egui::Key::Plus)),
                         )
                         .clicked()
                     {
@@ -1572,7 +1613,7 @@ impl Editor {
                     if ui
                         .add_enabled(
                             self.selection_drag.is_none() && self.zoom_percent > 50.0,
-                            egui::Button::new("Zoom out").shortcut_text("Ctrl+-"),
+                            egui::Button::new("Zoom out").shortcut_text(shortcut_text(ctx, egui::Key::Minus)),
                         )
                         .clicked()
                     {
@@ -1582,7 +1623,7 @@ impl Editor {
                     if ui
                         .add_enabled(
                             self.selection_drag.is_none(),
-                            egui::Button::new("Actual size (100%)").shortcut_text("Ctrl+0"),
+                            egui::Button::new("Actual size (100%)").shortcut_text(shortcut_text(ctx, egui::Key::Num0)),
                         )
                         .clicked()
                     {
@@ -2380,6 +2421,10 @@ impl Editor {
     }
 }
 
+fn shortcut_text(ctx: &egui::Context, key: egui::Key) -> String {
+    ctx.format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key))
+}
+
 fn main() -> eframe::Result {
     let icon = eframe::icon_data::from_png_bytes(APP_ICON_PNG)
         .map_err(|error| eframe::Error::AppCreation(Box::new(error)))?;
@@ -2394,6 +2439,7 @@ fn main() -> eframe::Result {
         },
         Box::new(|cc| {
             let mut fonts = egui::FontDefinitions::default();
+            #[cfg(target_os = "windows")]
             for (name, path) in [
                 ("consolas", r"C:\Windows\Fonts\consola.ttf"),
                 ("symbols", r"C:\Windows\Fonts\seguisym.ttf"),
@@ -3198,6 +3244,54 @@ mod tests {
     }
 
     #[test]
+    fn native_command_shortcuts_undo_redo_and_zoom_without_typing() {
+        for modifiers in [
+            egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+            egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND,
+        ] {
+            let ctx = context();
+            let mut editor = Editor::default();
+            let cell = Cell {
+                ch: 'A',
+                ..Cell::default()
+            };
+            editor.history.paint(&mut editor.doc.canvas, 0, 0, cell);
+            for (key, expected_ch, expected_zoom) in [
+                (egui::Key::Z, ' ', 100.0),
+                (egui::Key::Y, 'A', 100.0),
+                (egui::Key::Plus, 'A', 125.0),
+                (egui::Key::Minus, 'A', 100.0),
+                (egui::Key::Num0, 'A', 100.0),
+            ] {
+                frame(
+                    &ctx,
+                    &mut editor,
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                );
+                assert_eq!(editor.doc.canvas.get(0, 0).unwrap().ch, expected_ch);
+                assert_eq!(editor.zoom_percent, expected_zoom);
+            }
+            editor.undo();
+            let mut redo = key(egui::Key::Z);
+            if let egui::Event::Key {
+                modifiers: event_modifiers,
+                ..
+            } = &mut redo
+            {
+                *event_modifiers = modifiers | egui::Modifiers::SHIFT;
+            }
+            frame(&ctx, &mut editor, vec![redo]);
+            assert_eq!(editor.doc.canvas.get(0, 0).unwrap().ch, 'A');
+        }
+    }
+
+    #[test]
     fn zoom_menus_and_shortcuts_scale_cells_and_glyphs_without_changing_saved_art() {
         let ctx = context();
         let mut editor = Editor::default();
@@ -3214,10 +3308,10 @@ mod tests {
         click_text(&ctx, &mut editor, "Zoom in");
         assert_eq!(editor.zoom_percent, 125.0);
         for (key, modifiers) in [
-            (egui::Key::Equals, egui::Modifiers::CTRL),
+            (egui::Key::Equals, egui::Modifiers::COMMAND),
             (
                 egui::Key::Plus,
-                egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             ),
         ] {
             frame(
@@ -3257,7 +3351,7 @@ mod tests {
                 physical_key: None,
                 pressed: true,
                 repeat: false,
-                modifiers: egui::Modifiers::CTRL,
+                modifiers: egui::Modifiers::COMMAND,
             }],
         );
         assert_eq!(editor.zoom_percent, 100.0);
@@ -4319,11 +4413,11 @@ mod tests {
         let zoom = editor.zoom_percent;
         let mut undo = key(egui::Key::Z);
         if let egui::Event::Key { modifiers, .. } = &mut undo {
-            *modifiers = egui::Modifiers::CTRL;
+            *modifiers = egui::Modifiers::COMMAND;
         }
         let mut zoom_in = key(egui::Key::Plus);
         if let egui::Event::Key { modifiers, .. } = &mut zoom_in {
-            *modifiers = egui::Modifiers::CTRL;
+            *modifiers = egui::Modifiers::COMMAND;
         }
         frame(
             &ctx,

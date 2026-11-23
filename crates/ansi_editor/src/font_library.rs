@@ -66,7 +66,7 @@ impl FontLibrary {
         self.fonts.clear();
         let Some(directory) = self.directory.clone() else {
             return vec![
-                "Cannot locate ADraw's application data folder. Check access to your Windows profile."
+                "Cannot locate ADraw's application data folder. Check access to your user profile."
                     .into(),
             ];
         };

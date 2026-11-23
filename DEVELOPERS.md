@@ -55,6 +55,15 @@ system registration. Packaging builds the locked MSVC x64 release with the
 static C runtime, then creates an installer, portable ZIP, and `SHA256SUMS.txt`
 under `target\dist`. No runtime build tools are required by users.
 
+The workspace release profile favors executable size (`opt-level = "z"`),
+uses ThinLTO and one codegen unit, and strips symbols. These settings apply
+to local release builds and CI packaging; debug builds are unchanged.
+They trade optimization/build time and potentially some runtime speed for a
+smaller executable. Panic unwinding, accessibility, bundled fonts, image
+export, and TLS certificate verification remain enabled; no executable packer
+is used. Compare sizes using the same MSVC target and static-CRT flags as the
+packaging script, not a debug build.
+
 The installer is per-user, uses a stable application ID for upgrades, and does
 not remove Roaming application data or artwork. It does not close running
 editors automatically. The smoke test verifies installed bytes against the ZIP,
@@ -91,9 +100,63 @@ Use the new version in place of `0.2.0`. The
 with or without the `v` prefix, including prerelease tags. The tag must match
 the Cargo version, or packaging fails rather than publishing a mislabeled
 binary. It pins Rust 1.100.0 and official GitHub Actions commits, validates the
-workspace, builds and smoke-tests Windows artifacts, and publishes a GitHub
-release with checksums and generated notes. Prerelease tags produce prereleases.
+workspace on every supported native target, builds and smoke-tests the packages
+described below, and publishes one GitHub release containing all platforms
+with a combined checksum manifest and generated notes. Prerelease tags produce prereleases.
 The publication job alone has repository write permission.
+
+### Linux and macOS builds
+
+Install Rust 1.100.0 and native build tools: Xcode Command Line Tools on macOS,
+or a C compiler and `pkg-config` on Linux. On Ubuntu, the CI build and headless
+launch-test dependencies can be installed with:
+
+```sh
+sudo apt-get install build-essential pkg-config libxkbcommon-dev libwayland-dev \
+  libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 \
+  libxcursor1 libxi6 libxrandr2 xvfb xauth dbus-x11
+cargo test --locked --workspace
+cargo check --locked --workspace
+cargo run -p adraw
+```
+
+The [build workflow](.github/workflows/build.yml) runs on pushes to `main`,
+pull requests, manual dispatch, and through the tag-triggered release workflow.
+All targets run the workspace tests/checks and build a size-optimized release:
+
+| Platform | Native runner | Rust target | Package |
+| --- | --- | --- | --- |
+| Windows x64 | Windows 2025 | `x86_64-pc-windows-msvc` | Installer and portable ZIP |
+| Linux x64 | Ubuntu 22.04 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| Linux ARM64 | Ubuntu 22.04 ARM | `aarch64-unknown-linux-gnu` | `.tar.gz` |
+| macOS Intel | macOS 15 Intel | `x86_64-apple-darwin` | `.app` in `.tar.gz` |
+| macOS Apple Silicon | macOS 15 ARM | `aarch64-apple-darwin` | `.app` in `.tar.gz` |
+
+Build a native Unix package with Bash from the repository root, for example:
+
+```sh
+bash packaging/build-unix-release.sh x86_64-unknown-linux-gnu
+# On Apple Silicon:
+MACOSX_DEPLOYMENT_TARGET=11.0 bash packaging/build-unix-release.sh aarch64-apple-darwin
+```
+
+The script rejects mismatched host/target combinations and tags, creates
+`target/dist/adraw-VERSION-PLATFORM.tar.gz`, and writes `SHA256SUMS.txt`.
+Each archive contains documentation, license notices, and the example artwork.
+Linux binaries dynamically link platform libraries; building on Ubuntu 22.04
+sets the glibc baseline to 2.35, not universal compatibility with every distro.
+See the [User guide](USER_GUIDE.md) for runtime libraries and portal setup.
+macOS builds set the deployment target to 11.0, bundle an icon and versioned
+Info.plist, and apply/verify an ad-hoc signature. They are not notarized or
+Developer ID signed. No signing credentials are required.
+
+Package checks verify checksums, archive contents, executable permissions,
+macOS architecture/plist/signature, and dynamic dependencies. Linux launches
+the extracted executable under Xvfb with software OpenGL; macOS launches the
+extracted app executable. Both must remain running for 15 seconds. These
+checks do not replace interactive testing of platform file dialogs, clipboard,
+Wayland, accessibility, or Gatekeeper on downloaded apps.
+CI artifacts are retained for inspection; only version-tag runs publish releases.
 
 The application icon is bundled in
 [adraw.ico](crates/ansi_editor/assets/adraw.ico).
@@ -206,6 +269,9 @@ automatically and on normal exit. Window geometry and egui memory persistence
 are disabled to preserve existing startup behavior; artwork is not persisted
 as a preference. Unavailable storage produces an editor notification, and
 eframe logs filesystem storage failures.
+On Linux, storage uses `$XDG_DATA_HOME/adraw` (normally
+`~/.local/share/adraw`); on macOS it uses `~/Library/Application Support/ADraw`.
+The same native directory holds `app.ron` and the imported `fonts` folder.
 
 TheDraw collections are copied into the `fonts` subdirectory of
 `eframe::storage_dir("ADraw")` (`%APPDATA%\ADraw\data\fonts` on Windows).

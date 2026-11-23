@@ -1,1 +1,2 @@
 *.ans -text
+*.sh text eol=lf

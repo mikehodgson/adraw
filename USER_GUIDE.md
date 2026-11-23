@@ -11,6 +11,29 @@ your saved artwork, preferences, and imported fonts intact.
 The portable ZIP requires no installation; extract it and run `adraw.exe`.
 Both distributions include the display font, documentation, and license notices.
 
+Linux and macOS packages start with the next release after 0.2.0:
+
+- **Linux:** choose `linux-x64` or `linux-arm64`, extract the `.tar.gz`,
+  and run `./adraw` from the extracted directory. Use Ubuntu 22.04 or a
+  compatible newer desktop with glibc 2.35+, OpenGL, and X11 or Wayland.
+  File dialogs require a running D-Bus session and `xdg-desktop-portal` with
+  a desktop backend (such as `xdg-desktop-portal-gtk` or the KDE equivalent).
+  On Ubuntu, install missing runtime packages with
+  `sudo apt install libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libxcursor1 libxi6 libxrandr2 xdg-desktop-portal xdg-desktop-portal-gtk`.
+  These are not static binaries or AppImages.
+- **macOS:** choose `macos-arm64` for Apple Silicon or `macos-x64` for Intel,
+  extract the `.tar.gz`, and move `ADraw.app` to Applications.
+  macOS 11 or newer is required. Apps have an ad-hoc signature, not a
+  Developer ID signature or Apple notarization. After attempting to open a
+  trusted official download, use **System Settings > Privacy & Security >
+  Open Anyway** if macOS blocks it. Do not disable Gatekeeper globally.
+
+On macOS, use **Command** instead of **Ctrl** for the shortcuts below.
+Redo is **Command+Shift+Z** (**Command+Y** is also supported).
+The menus and tooltips show your platform's shortcut keys.
+The bundled CP437 font works on every platform; other Unicode glyphs use
+the available fallback fonts and can differ between systems.
+
 At startup, ADraw checks the official GitHub releases in the background.
 If a newer stable version is available, choose **Download update** to open
 the release page in your browser, or **Not now** (or close the notification)
@@ -199,7 +222,7 @@ or its undo history.
 
 1. Unzip your font collection, then open **Edit > TheDraw fonts...** and choose
    **Import TDF files...**. You can import several `.tdf` files at once. ADraw
-   copies them into `%APPDATA%\ADraw\data\fonts` and loads them automatically
+   copies them into ADraw's application data folder and loads them automatically
    on future launches; you can move or remove the original files afterward.
 2. Click a font in the scrollable **Imported fonts** list. Use **Search fonts**
    to filter by name. Enter text, adjust letter spacing, and check the live
@@ -220,6 +243,10 @@ Imported fonts remain available across restarts. Collections with the same
 filename are kept as separate copies when their contents differ; importing
 the same unchanged file again reuses its copy. Files that cannot be imported
 or restored produce an error message.
+
+Fonts are stored under `%APPDATA%\ADraw\data\fonts` on Windows,
+`~/.local/share/adraw/fonts` on Linux (or `$XDG_DATA_HOME/adraw/fonts`),
+and `~/Library/Application Support/ADraw/fonts` on macOS.
 
 Already-placed lettering is saved as ordinary artwork and does not require
 the font to view.
