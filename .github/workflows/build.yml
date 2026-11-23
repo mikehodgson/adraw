@@ -107,7 +107,7 @@ jobs:
             test -s ADraw.app/Contents/Resources/adraw.icns
             codesign --verify --deep --strict ADraw.app
             if [[ "$PLATFORM" == macos-arm64 ]]; then arch=arm64; else arch=x86_64; fi
-            lipo -verify_arch "$arch" ADraw.app/Contents/MacOS/adraw
+            lipo ADraw.app/Contents/MacOS/adraw -verify_arch "$arch"
             otool -L ADraw.app/Contents/MacOS/adraw
             ADraw.app/Contents/MacOS/adraw > launch.log 2>&1 &
             pid=$!
