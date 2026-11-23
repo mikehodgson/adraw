@@ -1,6 +1,8 @@
 use std::fmt;
 
 pub const MAX_CELLS: usize = 1_000_000;
+pub const DEFAULT_WIDTH: usize = 80;
+pub const DEFAULT_HEIGHT: usize = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Color {

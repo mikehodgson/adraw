@@ -5,9 +5,6 @@ type directly on the canvas, and add lettering with TheDraw fonts.
 
 ![ADraw displaying its application icon as truecolor ANSI artwork](docs/images/adraw-screenshot.jpg)
 
-The icon recreated as 64 x 36 truecolor ANSI art.
-[Open the example in ADraw](examples/adraw-icon.ans).
-
 ## Get started
 
 1. Download and run the Windows installer from the
@@ -35,6 +32,7 @@ a SmartScreen warning; download from the official release page.
 - A persistent TheDraw TDF font library with searchable selection and text previews.
 - Proportional zoom and a reorderable, collapsible sidebar.
 - ANSI file loading/saving and SAUCE artwork credits.
+- Rendered PNG and JPEG exports of the full artwork or active selection.
 
 ## Learn more
 

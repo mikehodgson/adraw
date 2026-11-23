@@ -2,10 +2,12 @@
 
 mod font_library;
 mod glyph;
+mod image_export;
+mod updates;
 
 use ansi_core::{
     ans_io::{self, Document},
-    canvas::{Canvas, Cell, Color, History},
+    canvas::{Canvas, Cell, Color, History, DEFAULT_HEIGHT, DEFAULT_WIDTH},
     encoding::{decode_cp437, Encoding},
     sauce::Sauce,
     tdf,
@@ -23,6 +25,7 @@ const DEFAULT_WINDOW_SIZE: Vec2 = Vec2::new(1006.0, 652.0);
 const SIDEBAR_ORDER_KEY: &str = "sidebar_order_v1";
 const SIDEBAR_COLLAPSED_KEY: &str = "sidebar_collapsed_v1";
 const APP_ICON_PNG: &[u8] = include_bytes!("../assets/adraw.png");
+const GITHUB_PAGE: &str = "https://github.com/mikehodgson/adraw";
 const ZOOM_LEVELS: [u16; 8] = [50, 75, 100, 125, 150, 200, 300, 400];
 const DEFAULT_ZOOM_PERCENT: f32 = 100.0;
 
@@ -64,6 +67,9 @@ fn display_color(color: Color) -> Color32 {
 }
 
 struct Editor {
+    update_check: updates::UpdateCheck,
+    about_open: bool,
+    about_logo: Option<egui::TextureHandle>,
     sidebar_order: Vec<SidebarSection>,
     sidebar_collapsed: Vec<SidebarSection>,
     doc: Document,
@@ -211,10 +217,13 @@ enum PendingAction {
 impl Default for Editor {
     fn default() -> Self {
         Self {
+            update_check: updates::UpdateCheck::default(),
+            about_open: false,
+            about_logo: None,
             sidebar_order: SidebarSection::ALL.to_vec(),
             sidebar_collapsed: Vec::new(),
             doc: Document {
-                canvas: Canvas::new(80, 25).unwrap(),
+                canvas: Canvas::new(DEFAULT_WIDTH, DEFAULT_HEIGHT).unwrap(),
                 sauce: Some(Sauce::default()),
             },
             history: History::default(),
@@ -223,8 +232,8 @@ impl Default for Editor {
                 ..Cell::default()
             },
             encoding: Encoding::Cp437,
-            width: 80,
-            height: 25,
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
             zoom_percent: DEFAULT_ZOOM_PERCENT,
             path: None,
             message: None,
@@ -480,13 +489,15 @@ impl Editor {
     }
 
     fn new_image(&mut self) {
-        match Canvas::new(self.width, self.height) {
+        match Canvas::new(DEFAULT_WIDTH, DEFAULT_HEIGHT) {
             Ok(canvas) => {
                 self.doc = Document {
                     canvas,
                     sauce: Some(Sauce::default()),
                 };
                 self.path = None;
+                self.width = DEFAULT_WIDTH;
+                self.height = DEFAULT_HEIGHT;
                 self.history = History::default();
                 self.dirty = false;
                 self.cursor = (0, 0);
@@ -504,9 +515,13 @@ impl Editor {
         else {
             return;
         };
+        self.open_path(path);
+    }
+
+    fn open_path(&mut self, path: PathBuf) {
         let result = std::fs::read(&path)
             .map_err(|e| format!("Could not read file: {e}"))
-            .and_then(|bytes| ans_io::load(&bytes, self.encoding, self.width, self.height));
+            .and_then(|bytes| ans_io::load_auto(&bytes, self.encoding));
         match result {
             Ok(doc) => {
                 self.width = doc.canvas.width();
@@ -578,6 +593,35 @@ impl Editor {
         if let Err(error) = std::fs::write(path, bytes) {
             self.message = Some(format!("Could not save selection: {error}"));
         }
+    }
+
+    fn export_image(&mut self, ctx: &egui::Context, format: image_export::Format) {
+        let name = if self.selection.is_some() {
+            "selection"
+        } else {
+            "art"
+        };
+        let Some(mut path) = rfd::FileDialog::new()
+            .add_filter(format.label(), format.extensions())
+            .set_file_name(format!("{name}.{}", format.extension()))
+            .save_file()
+        else {
+            return;
+        };
+        if path.extension().is_none() {
+            path.set_extension(format.extension());
+        }
+        let result = self
+            .rendered_image(ctx)
+            .and_then(|image| image_export::save(&path, image, format));
+        if let Err(error) = result {
+            self.message = Some(error);
+        }
+    }
+
+    fn rendered_image(&self, ctx: &egui::Context) -> Result<image::RgbImage, String> {
+        let definitions = ctx.fonts(|fonts| fonts.lock().fonts.definitions().clone());
+        image_export::render(&self.doc, self.selection, definitions)
     }
 
     fn request(&mut self, action: PendingAction, ctx: &egui::Context) {
@@ -1316,7 +1360,7 @@ impl Editor {
     }
 
     fn ui(&mut self, ctx: &egui::Context) {
-        if self.selection_drag.is_none() {
+        if !self.about_open && self.selection_drag.is_none() {
             if ctx.input_mut(|input| {
                 input.consume_key(egui::Modifiers::CTRL, egui::Key::Plus)
                     || input.consume_key(egui::Modifiers::CTRL, egui::Key::Equals)
@@ -1342,12 +1386,14 @@ impl Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending = Some(PendingAction::Close);
         }
-        if self.selection_drag.is_none()
+        if !self.about_open
+            && self.selection_drag.is_none()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Z))
         {
             self.undo();
         }
-        if self.selection_drag.is_none()
+        if !self.about_open
+            && self.selection_drag.is_none()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Y))
         {
             self.redo();
@@ -1360,8 +1406,7 @@ impl Editor {
                     if ui
                         .button("New image")
                         .on_hover_text(format!(
-                            "Create a {} x {} image; set dimensions in the Canvas menu",
-                            self.width, self.height
+                            "Create a {DEFAULT_WIDTH} x {DEFAULT_HEIGHT} image; use Resize canvas for custom dimensions"
                         ))
                         .clicked()
                     {
@@ -1370,7 +1415,7 @@ impl Editor {
                     }
                     if ui
                         .button("Open...")
-                        .on_hover_text("Files without SAUCE use the dimensions in the Canvas menu")
+                        .on_hover_text("Use SAUCE dimensions, or 80 columns and the artwork's inferred height")
                         .clicked()
                     {
                         ui.close_menu();
@@ -1397,6 +1442,18 @@ impl Editor {
                     {
                         ui.close_menu();
                         self.save_selection();
+                    }
+                    for (label, format) in [
+                        ("Export PNG...", image_export::Format::Png),
+                        ("Export JPEG...", image_export::Format::Jpeg),
+                    ] {
+                        if ui.button(label)
+                            .on_hover_text("Render the selection, or the full artwork when nothing is selected")
+                            .clicked()
+                        {
+                            ui.close_menu();
+                            self.export_image(ctx, format);
+                        }
                     }
                     ui.separator();
                     ui.menu_button("Encoding", |ui| {
@@ -1534,9 +1591,7 @@ impl Editor {
                     }
                 });
                 ui.menu_button("Canvas", |ui| {
-                    ui.strong("Dimensions").on_hover_text(
-                        "Used for new images, resizing, and files without SAUCE metadata",
-                    );
+                    ui.strong("Dimensions").on_hover_text("Set dimensions for Resize canvas");
                     ui.horizontal(|ui| {
                         ui.label("Width");
                         ui.add(egui::DragValue::new(&mut self.width).range(1..=65535));
@@ -1562,6 +1617,9 @@ impl Editor {
                         }
                     }
                 });
+                if ui.button("About").clicked() {
+                    self.about_open = true;
+                }
             });
         });
         let used_colors = artwork_colors(&self.doc);
@@ -1916,6 +1974,7 @@ impl Editor {
                         }
                     }
                     let focused = response.has_focus()
+                        && !self.about_open
                         && !self.picker_open
                         && !self.tdf_open
                         && !moving_selection
@@ -2079,6 +2138,7 @@ impl Editor {
                 }
             }
         }
+        self.update_check.show(ctx);
         if let Some(message) = self.message.clone() {
             egui::Window::new("Error")
                 .collapsible(false)
@@ -2108,6 +2168,7 @@ impl Editor {
                     });
                 });
         }
+        self.about_window(ctx);
         // Canvas edits follow the sidebar, so refresh its used swatches on the next frame.
         if ctx.input(|input| !input.events.is_empty()) {
             ctx.request_repaint();
@@ -2116,6 +2177,48 @@ impl Editor {
 }
 
 impl Editor {
+    fn about_window(&mut self, ctx: &egui::Context) {
+        if !self.about_open {
+            return;
+        }
+        if self.about_logo.is_none() {
+            match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
+                Ok(icon) => {
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [icon.width as usize, icon.height as usize],
+                        &icon.rgba,
+                    );
+                    self.about_logo = Some(ctx.load_texture(
+                        "adraw-about-logo",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+                Err(error) => {
+                    self.message = Some(format!("Could not display the application logo: {error}"));
+                    self.about_open = false;
+                    return;
+                }
+            }
+        }
+        let mut open = self.about_open;
+        egui::Window::new("About ADraw")
+            .open(&mut open)
+            .default_width(320.0)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    if let Some(logo) = &self.about_logo {
+                        ui.add(egui::Image::new(logo).fit_to_exact_size(Vec2::splat(96.0)));
+                    }
+                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                    ui.hyperlink_to("GitHub repository", GITHUB_PAGE);
+                });
+                ui.separator();
+                self.update_check.controls(ui);
+            });
+        self.about_open = open;
+    }
+
     fn tdf_window(&mut self, ctx: &egui::Context) {
         let mut open = self.tdf_open;
         egui::Window::new("TheDraw font text")
@@ -2314,7 +2417,9 @@ fn main() -> eframe::Result {
             glyph::fonts(&mut fonts);
             material_fonts(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
-            Ok(Box::new(Editor::new(cc.storage)))
+            let mut editor = Editor::new(cc.storage);
+            editor.update_check = updates::UpdateCheck::start(cc.egui_ctx.clone());
+            Ok(Box::new(editor))
         }),
     )
 }
@@ -4174,6 +4279,174 @@ mod tests {
     }
 
     #[test]
+    fn about_menu_shows_logo_version_links_and_blocks_editing_until_closed() {
+        let ctx = context();
+        let mut editor = Editor::default();
+        frame(&ctx, &mut editor, vec![]);
+        editor
+            .history
+            .paint(&mut editor.doc.canvas, 0, 0, editor.brush);
+        editor.dirty = true;
+        let original = editor.doc.canvas.clone();
+        click_text(&ctx, &mut editor, "About");
+        frame(&ctx, &mut editor, vec![]);
+        let output = frame(&ctx, &mut editor, vec![]);
+        assert!(editor.about_open);
+        assert!(ctx.memory(|memory| memory.top_modal_layer().is_none()));
+        let logo = editor.about_logo.as_ref().unwrap();
+        assert_eq!(logo.size(), [256, 256]);
+        assert!(ctx
+            .tessellate(output.shapes.clone(), output.pixels_per_point)
+            .iter()
+            .any(|primitive| matches!(&primitive.primitive,
+                egui::epaint::Primitive::Mesh(mesh) if mesh.texture_id == logo.id())));
+        for label in [
+            "About ADraw",
+            concat!("Version ", env!("CARGO_PKG_VERSION")),
+            "GitHub repository",
+            "Check for updates",
+        ] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == label)),
+                "{label}"
+            );
+        }
+        let output = click_text(&ctx, &mut editor, "GitHub repository");
+        assert!(output.platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::OpenUrl(url) if url.url == GITHUB_PAGE)
+        ));
+        let zoom = editor.zoom_percent;
+        let mut undo = key(egui::Key::Z);
+        if let egui::Event::Key { modifiers, .. } = &mut undo {
+            *modifiers = egui::Modifiers::CTRL;
+        }
+        let mut zoom_in = key(egui::Key::Plus);
+        if let egui::Event::Key { modifiers, .. } = &mut zoom_in {
+            *modifiers = egui::Modifiers::CTRL;
+        }
+        frame(
+            &ctx,
+            &mut editor,
+            vec![undo, zoom_in, egui::Event::Text("A".into())],
+        );
+        assert_eq!(editor.doc.canvas, original);
+        assert_eq!(editor.zoom_percent, zoom);
+        assert!(editor.dirty);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Close")));
+        let output = frame(&ctx, &mut editor, vec![]);
+        let title_rect = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "About ADraw" => {
+                    Some(text.galley.rect.translate(text.pos.to_vec2()))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let close_pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points: [a, b], .. }
+                    if a.x > title_rect.right()
+                        && b.x > a.x
+                        && b.y > a.y
+                        && title_rect.y_range().contains((a.y + b.y) / 2.0) =>
+                {
+                    Some(*a + (*b - *a) / 2.0)
+                }
+                _ => None,
+            })
+            .expect("standard window title bar must paint its X close control");
+        for pressed in [true, false] {
+            frame(
+                &ctx,
+                &mut editor,
+                vec![
+                    egui::Event::PointerMoved(close_pos),
+                    pointer_button(close_pos, pressed),
+                ],
+            );
+        }
+        assert!(!editor.about_open);
+        editor.undo();
+        assert_eq!(*editor.doc.canvas.get(0, 0).unwrap(), Cell::default());
+    }
+
+    #[test]
+    fn opening_files_replaces_dimensions_and_new_images_restore_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let metadata_path = directory.path().join("metadata.ans");
+        let doc = Document {
+            canvas: Canvas::new(4, 3).unwrap(),
+            sauce: Some(Sauce::default()),
+        };
+        std::fs::write(&metadata_path, ans_io::save(&doc, Encoding::Cp437).unwrap()).unwrap();
+        let plain_path = directory.path().join("plain.ans");
+        std::fs::write(&plain_path, b"\x1b[30;1HX").unwrap();
+        let mut editor = Editor::default();
+        editor.width = 120;
+        editor.height = 70;
+        editor
+            .history
+            .paint(&mut editor.doc.canvas, 0, 0, editor.brush);
+        editor.dirty = true;
+        editor.open_path(metadata_path.clone());
+        assert_eq!((editor.width, editor.height), (4, 3));
+        assert_eq!(
+            (editor.doc.canvas.width(), editor.doc.canvas.height()),
+            (4, 3)
+        );
+        assert_eq!(editor.path.as_ref(), Some(&metadata_path));
+        assert!(!editor.dirty);
+        editor.undo();
+        assert!(!editor.dirty);
+
+        editor.width = 2;
+        editor.height = 2;
+        editor.open_path(plain_path.clone());
+        assert_eq!((editor.width, editor.height), (80, 30));
+        assert_eq!(
+            (editor.doc.canvas.width(), editor.doc.canvas.height()),
+            (80, 30)
+        );
+        assert_eq!(editor.doc.canvas.get(0, 29).unwrap().ch, 'X');
+
+        let bad_path = directory.path().join("bad.ans");
+        std::fs::write(&bad_path, b"\x1b[").unwrap();
+        let original = editor.doc.canvas.clone();
+        editor.open_path(bad_path);
+        assert!(editor
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("incomplete CSI"));
+        assert_eq!(editor.doc.canvas, original);
+        assert_eq!((editor.width, editor.height), (80, 30));
+        assert_eq!(editor.path.as_ref(), Some(&plain_path));
+        editor.message = None;
+
+        editor.width = 999;
+        editor.height = 999;
+        editor.new_image();
+        assert_eq!((editor.width, editor.height), (80, 25));
+        assert_eq!(
+            (editor.doc.canvas.width(), editor.doc.canvas.height()),
+            (80, 25)
+        );
+        assert!(editor.path.is_none());
+        assert!(!editor.dirty);
+        assert!(editor
+            .doc
+            .canvas
+            .get(0, 0)
+            .is_some_and(|cell| *cell == Cell::default()));
+    }
+
+    #[test]
     fn menus_preserve_dimensions_resize_history_and_unsaved_protection() {
         let ctx = context();
         let mut editor = Editor::default();
@@ -4185,8 +4458,9 @@ mod tests {
         editor.height = 3;
         click_text(&ctx, &mut editor, "File");
         click_text(&ctx, &mut editor, "New image");
-        assert_eq!(editor.doc.canvas.width(), 4);
-        assert_eq!(editor.doc.canvas.height(), 3);
+        assert_eq!(editor.doc.canvas.width(), 80);
+        assert_eq!(editor.doc.canvas.height(), 25);
+        assert_eq!((editor.width, editor.height), (80, 25));
         editor.width = 6;
         editor.height = 5;
         click_text(&ctx, &mut editor, "Canvas");
@@ -4195,8 +4469,8 @@ mod tests {
         assert_eq!(editor.doc.canvas.height(), 5);
         click_text(&ctx, &mut editor, "Edit");
         click_text(&ctx, &mut editor, "Undo");
-        assert_eq!(editor.doc.canvas.width(), 4);
-        assert_eq!(editor.doc.canvas.height(), 3);
+        assert_eq!(editor.doc.canvas.width(), 80);
+        assert_eq!(editor.doc.canvas.height(), 25);
         click_text(&ctx, &mut editor, "Edit");
         click_text(&ctx, &mut editor, "Redo");
         assert_eq!(editor.doc.canvas.width(), 6);
@@ -4213,6 +4487,61 @@ mod tests {
             .commands
             .iter()
             .any(|command| matches!(command, egui::ViewportCommand::Close)));
+    }
+
+    #[test]
+    fn image_export_uses_selection_and_native_scale_without_changing_editor_state() {
+        let ctx = context();
+        let mut editor = Editor::default();
+        let cell = Cell {
+            ch: '█',
+            fg: Color::Rgb(12, 34, 56),
+            ..Cell::default()
+        };
+        editor.history.paint(&mut editor.doc.canvas, 3, 2, cell);
+        editor.dirty = true;
+        editor.path = Some(PathBuf::from("original.ans"));
+        editor.zoom_percent = 400.0;
+        editor.selection = Some(Selection {
+            start: (4, 3),
+            end: (3, 2),
+        });
+        let original = editor.doc.canvas.clone();
+        let mut rendered = None;
+        let _ = ctx.run(Default::default(), |ctx| {
+            rendered = Some(editor.rendered_image(ctx).unwrap());
+        });
+        let selected = rendered.unwrap();
+        assert_eq!(selected.dimensions(), (18, 32));
+        assert_eq!(selected.get_pixel(0, 0).0, [12, 34, 56]);
+        assert_eq!(selected.get_pixel(9, 16).0, [0, 0, 0]);
+        assert_eq!(editor.doc.canvas, original);
+        assert_eq!(
+            editor.path.as_deref(),
+            Some(std::path::Path::new("original.ans"))
+        );
+        assert!(editor.dirty);
+        assert_eq!(editor.selection.unwrap().bounds(), (3, 2, 4, 3));
+        editor.selection = None;
+        let _ = ctx.run(Default::default(), |ctx| {
+            assert_eq!(editor.rendered_image(ctx).unwrap().dimensions(), (720, 400));
+        });
+        editor.undo();
+        assert_eq!(*editor.doc.canvas.get(3, 2).unwrap(), Cell::default());
+        click_text(&ctx, &mut editor, "File");
+        let output = frame(&ctx, &mut editor, vec![]);
+        for label in [
+            "Save as...",
+            "Save selection as...",
+            "Export PNG...",
+            "Export JPEG...",
+        ] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == label)),
+                "{label}"
+            );
+        }
     }
 
     #[test]

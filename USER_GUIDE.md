@@ -11,6 +11,22 @@ your saved artwork, preferences, and imported fonts intact.
 The portable ZIP requires no installation; extract it and run `adraw.exe`.
 Both distributions include the display font, documentation, and license notices.
 
+At startup, ADraw checks the official GitHub releases in the background.
+If a newer stable version is available, choose **Download update** to open
+the release page in your browser, or **Not now** (or close the notification)
+to keep editing. Dismissal lasts until the next launch. No update is downloaded
+or installed automatically. Offline, timed-out, or inaccessible checks do not
+show an error or prevent you from using ADraw.
+
+Choose **About** in the top menu to see the application logo, current version,
+and a link to the GitHub repository. **Check for updates** runs the same
+background check on demand and reports whether a newer release is available,
+you are up to date, or the check is unavailable. If a check is already running,
+wait for it to finish before trying again. A download link opens the official
+release page; nothing is installed automatically. About uses the same movable,
+resizable, collapsible window as the other tools. Close it with its title-bar
+**X**; clicking outside does not dismiss it.
+
 ## Contents
 
 - [Create and resize images](#create-and-resize-images)
@@ -27,8 +43,9 @@ Both distributions include the display font, documentation, and license notices.
 ## Create and resize images
 
 Choose **File > New image** for the default **80 x 25** canvas.
-For a custom size, set **Width** and **Height** in the **Canvas** menu before
-creating the image.
+New images always reset to these defaults, regardless of the previous image.
+For a custom size, create a new image, then set **Width** and **Height** in the
+**Canvas** menu and choose **Resize canvas**.
 
 To resize an existing image, set the new dimensions in **Canvas**, then choose
 **Resize canvas**. Use **Edit > Undo** or **Ctrl+Z** to undo a resize.
@@ -95,9 +112,12 @@ including blank cells. Moves, cuts, and pastes can each be undone as one action.
 
 ## Open and save artwork
 
-Choose **File > Open...** to load an `.ans` file. Files without SAUCE dimensions
-use the Width/Height in **Canvas**; set these before opening the file. Artwork
-too large for those dimensions is rejected.
+Choose **File > Open...** to load an `.ans` file. Opening replaces the canvas
+dimensions and the **Canvas** menu's Width and Height with those of the file.
+SAUCE dimensions take precedence. If width is missing, ADraw assumes **80**
+columns; if height is missing, it is inferred from the artwork's rendered rows.
+The previous image's dimensions are never used. Trailing line breaks do not
+add empty rows, and an empty file opens as an 80 x 1 canvas.
 
 Choose **File > Encoding** before opening or saving. See
 [Encoding and compatibility](#encoding-and-compatibility) for the choices.
@@ -112,6 +132,25 @@ Select an area, then choose **File > Save selection as...**.
 This creates a separate, smaller ANSI file with the selected area's dimensions
 and artwork credits. It does not change your full working image or replace
 saving that image.
+
+### Export a rendered image
+
+Choose **File > Export PNG...** or **File > Export JPEG...** and choose a
+filename. With an active selection, only that rectangle is exported;
+otherwise the full canvas is rendered.
+
+Images use the display font and colors at native **9 x 16 pixels per cell**,
+independent of zoom or window size. Backgrounds, bold/bright colors, inverse,
+underline, and iCE colors are included; blink is captured as steady text,
+as in the editor. Cursor, selection outlines, sidebar, and SAUCE metadata
+are not part of the image.
+
+PNG preserves pixels exactly; JPEG uses quality 90 and may soften fine details.
+Image exports do not change your ANSI save path, artwork, selection, or undo
+history, and do not mark unsaved artwork as saved. Keep the ANSI file for later
+editing. Exports are limited to 32 megapixels; select a smaller area if needed.
+Characters missing from the available display fonts produce an actionable error
+rather than a substituted glyph.
 
 ## SAUCE artwork credits
 

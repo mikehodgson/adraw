@@ -4,23 +4,30 @@ All notable changes to ADraw are documented here. This changelog follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Changes after v0.1.0 stay under **Unreleased** until a release is explicitly
+Changes after the latest release stay under **Unreleased** until a release is explicitly
 requested.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
 ### Added
 
-- A 64 x 36 truecolor ANSI version of the application icon, with SAUCE metadata.
-- An actual ADraw screenshot and a link to the example artwork in the README.
+- Added an about window with manual update check with progress and results.
+- PNG and JPEG exports in the File menu render the active selection or the
+  full artwork at native character-cell resolution.
+- Startup check for newer official GitHub releases.
 
 ### Changed
 
 - Windows installer and portable packages include the README screenshot,
   example artwork, and changelog so local documentation links work.
-- Git preserves `.ans` files as raw bytes without text line-ending conversion.
-- Contributor guidance requires changelog maintenance and explicit approval
-  for version increases, release tags, and release publication.
+
+### Fixed
+
+- Opening artwork resets canvas dimensions to the file's SAUCE dimensions,
+  or 80 columns and an inferred height when dimensions are missing. New images
+  always reset to the default 80 x 25 canvas instead of reusing the previous size.
 
 ## [0.1.0] - 2026-11-22
 
@@ -38,5 +45,6 @@ requested.
 - A user guide, per-user Windows installer, portable ZIP, checksums, and
   automatic GitHub releases from explicitly pushed version tags.
 
-[Unreleased]: https://github.com/mikehodgson/adraw/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mikehodgson/adraw/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mikehodgson/adraw/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mikehodgson/adraw/releases/tag/v0.1.0

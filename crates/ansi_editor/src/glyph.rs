@@ -3,8 +3,8 @@ use eframe::egui::{
     Color32, FontData, FontDefinitions, FontFamily, Mesh, Painter, Pos2, Rect, Shape, Vec2,
 };
 
-const WIDTH: usize = 9;
-const HEIGHT: usize = 16;
+pub const WIDTH: usize = 9;
+pub const HEIGHT: usize = 16;
 const BITMAP: &[u8; 256 * HEIGHT * 2] = include_bytes!("../assets/ibm-vga-9x16.bin");
 pub const FONT_NAME: &str = "ibm-vga-9x16";
 pub const CELL_SIZE: Vec2 = Vec2::new(WIDTH as f32, HEIGHT as f32);
@@ -41,6 +41,55 @@ pub fn cell_rect(origin: Pos2, x: usize, y: usize, size: Vec2, pixels_per_point:
 fn row(byte: u8, y: usize) -> u16 {
     let offset = (byte as usize * HEIGHT + y) * 2;
     u16::from_le_bytes([BITMAP[offset], BITMAP[offset + 1]])
+}
+
+pub fn rasterize(
+    ch: char,
+    fonts: &eframe::egui::epaint::text::Fonts,
+) -> Result<[u8; WIDTH * HEIGHT], String> {
+    let mut mask = [0; WIDTH * HEIGHT];
+    if let Some(byte) = encode_cp437(ch) {
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                if row(byte, y) & (1 << (WIDTH - 1 - x)) != 0 {
+                    mask[y * WIDTH + x] = 255;
+                }
+            }
+        }
+        return Ok(mask);
+    }
+    let font = eframe::egui::FontId::monospace(16.0);
+    if !fonts.has_glyph(&font, ch) {
+        return Err(format!(
+            "Cannot render '{ch}' (U+{:04X}): no installed display font contains this character.",
+            ch as u32
+        ));
+    }
+    let galley = fonts.layout_no_wrap(ch.to_string(), font, Color32::WHITE);
+    let origin = ((CELL_SIZE - galley.size()) / 2.0).round();
+    let atlas = fonts.texture_atlas();
+    let atlas = atlas.lock();
+    let image = atlas.image();
+    for glyph in galley.rows.iter().flat_map(|row| &row.glyphs) {
+        let uv = glyph.uv_rect;
+        if uv.is_nothing() {
+            continue;
+        }
+        let top_left = (glyph.pos + uv.offset).round() + origin;
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let local = Pos2::new(x as f32 + 0.5, y as f32 + 0.5) - top_left;
+                if local.x >= 0.0 && local.y >= 0.0 && local.x < uv.size.x && local.y < uv.size.y {
+                    let tx = usize::from(uv.min[0]) + local.x.floor() as usize;
+                    let ty = usize::from(uv.min[1]) + local.y.floor() as usize;
+                    // Match egui's font-atlas coverage gamma at native pixel size.
+                    let alpha = (image[(tx, ty)].powf(0.55) * 255.0).round() as u8;
+                    mask[y * WIDTH + x] = mask[y * WIDTH + x].max(alpha);
+                }
+            }
+        }
+    }
+    Ok(mask)
 }
 
 fn rectangles(ch: char, rect: Rect, pixels_per_point: f32) -> Option<Vec<Rect>> {
@@ -107,6 +156,38 @@ pub fn paint(painter: &Painter, ch: char, rect: Rect, color: Color32) -> bool {
 mod tests {
     use super::*;
     use ansi_core::encoding::decode_cp437;
+
+    #[test]
+    fn exported_glyphs_match_bitmap_geometry_and_support_unicode_fallback() {
+        let mut definitions = FontDefinitions::default();
+        fonts(&mut definitions);
+        let fonts = eframe::egui::epaint::text::Fonts::new(1.0, 4096, definitions);
+        let rect = Rect::from_min_size(Pos2::ZERO, CELL_SIZE);
+        for byte in 0..=255 {
+            let ch = decode_cp437(byte);
+            let mask = rasterize(ch, &fonts).unwrap();
+            let parts = rectangles(ch, rect, 1.0).unwrap();
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    assert_eq!(
+                        mask[y * WIDTH + x] == 255,
+                        parts
+                            .iter()
+                            .any(|part| part.contains(Pos2::new(x as f32 + 0.5, y as f32 + 0.5))),
+                        "CP437 {byte:02X}, pixel {x},{y}",
+                    );
+                }
+            }
+        }
+        for ch in ['€', 'λ'] {
+            let mask = rasterize(ch, &fonts).unwrap();
+            assert!(mask.iter().any(|alpha| *alpha > 0), "{ch}");
+            assert!(mask.iter().any(|alpha| *alpha == 0), "{ch}");
+        }
+        assert!(rasterize('\u{10ffff}', &fonts)
+            .unwrap_err()
+            .contains("no installed display font"));
+    }
 
     #[test]
     fn all_cp437_glyphs_render_the_embedded_bitmap_without_smoothing() {

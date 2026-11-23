@@ -28,9 +28,15 @@ impl Default for Sauce {
 
 impl Sauce {
     pub fn dimensions(&self) -> Option<(usize, usize)> {
-        let w = u16::from_le_bytes([self.raw[96], self.raw[97]]) as usize;
-        let h = u16::from_le_bytes([self.raw[98], self.raw[99]]) as usize;
-        (w > 0 && h > 0).then_some((w, h))
+        self.width().zip(self.height())
+    }
+    pub fn width(&self) -> Option<usize> {
+        let width = u16::from_le_bytes([self.raw[96], self.raw[97]]) as usize;
+        (width > 0).then_some(width)
+    }
+    pub fn height(&self) -> Option<usize> {
+        let height = u16::from_le_bytes([self.raw[98], self.raw[99]]) as usize;
+        (height > 0).then_some(height)
     }
     pub fn flags(&self) -> u8 {
         self.raw[105]

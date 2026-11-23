@@ -45,8 +45,8 @@ Run from the project root in PowerShell:
 $compiler = .\packaging\Get-InnoSetup.ps1 -Destination "$PWD\target\tools\innosetup"
 .\packaging\Build-Release.ps1 -InnoCompiler $compiler
 .\packaging\Test-Installer.ps1 `
-  -Installer "$PWD\target\dist\adraw-0.1.0-windows-x64-setup.exe" `
-  -PortableZip "$PWD\target\dist\adraw-0.1.0-windows-x64.zip"
+  -Installer "$PWD\target\dist\adraw-0.2.0-windows-x64-setup.exe" `
+  -PortableZip "$PWD\target\dist\adraw-0.2.0-windows-x64.zip"
 ```
 
 The compiler helper downloads pinned Inno Setup 6.7.4, verifies its SHA-256
@@ -82,11 +82,11 @@ to refresh and check the lockfile, and commit the changes to `main`. Then:
 ```powershell
 gh auth setup-git
 git push origin main
-git tag -a v0.1.0 -m "ADraw 0.1.0"
-git push origin v0.1.0
+git tag -a v0.2.0 -m "ADraw 0.2.0"
+git push origin v0.2.0
 ```
 
-Use the new version in place of `0.1.0`. The
+Use the new version in place of `0.2.0`. The
 [release workflow](.github/workflows/release.yml) runs for pushed version tags
 with or without the `v` prefix, including prerelease tags. The tag must match
 the Cargo version, or packaging fails rather than publishing a mislabeled
@@ -147,7 +147,33 @@ use the product name **ADraw**.
 | [tdf.rs](crates/ansi_core/src/tdf.rs) | Bounded TheDraw font parsing and character-cell text rendering. |
 | [main.rs](crates/ansi_editor/src/main.rs) | Menus, dialogs, palette/font pickers, editing input, selections, clipboard, and viewport zoom. |
 | [font_library.rs](crates/ansi_editor/src/font_library.rs) | Persistent, validated TDF imports and startup font-library loading. |
+| [updates.rs](crates/ansi_editor/src/updates.rs) | Background official-release checks and dismissible download notifications. |
+| [image_export.rs](crates/ansi_editor/src/image_export.rs) | Bounded native-resolution PNG/JPEG rendering and atomic export writes. |
 | [glyph.rs](crates/ansi_editor/src/glyph.rs) | IBM VGA bitmap rendering for all CP437 glyphs and shared cell geometry. |
+
+The startup release check runs once on a worker thread, using the official
+GitHub latest-release API without credentials. It has a 5-second connection
+timeout, a 10-second overall timeout, a 256 KiB response limit, and no redirects.
+Semantic version precedence ignores build metadata; only newer stable releases
+are offered. Failures are logged without an editor error dialog. The notification
+opens a fixed official release URL only on user request and does not install
+updates. Tests use local HTTP fixtures rather than GitHub.
+
+The About window uses the same `egui::Window` as the other tool windows,
+including its built-in title bar and close control. It reuses the bundled
+application icon and Cargo package version.
+Its manual update button reuses the same checker and does not start overlapping
+requests. Update status stays in the About dialog; automatic failures still
+do not open an error notification. Canvas typing and global editing/zoom
+shortcuts are gated while the About window is open.
+
+Image export is desktop rendering, not a core file format. It uses the same
+cell colors, embedded CP437 bitmap, and active fallback font definitions as
+the editor, at 9 x 16 pixels per cell regardless of zoom. Unicode coverage
+comes from egui's font atlas at native scale. Pixel allocation is limited to
+32 megapixels and the glyph-mask cache is bounded. Export writes a complete
+temporary image in the destination directory before replacing the chosen file;
+errors must not change the document or its save path.
 
 Keep file-format and document logic out of the GUI. Read ANSI files as raw
 bytes; do not pass CP437 input through naive UTF-8 decoding. Strip SAUCE before
@@ -211,7 +237,10 @@ its ANSI/indexed/RGB representation until the user edits it.
 
 - ANSI support includes 16-color, indexed (`38;5` / `48;5`), and RGB
   (`38;2` / `48;2`) SGR, plus common CSI cursor commands; it is not a complete VT
-  terminal emulator. Files without SAUCE use the configured canvas dimensions.
+  terminal emulator. Desktop opens use `ans_io::load_auto`: SAUCE width and height
+  are handled independently, missing width defaults to 80, and missing height
+  grows to the highest rendered row within the core cell limit. Explicit-size
+  `ans_io::load` retains its fallback-dimension behavior for callers and tests.
 - Selection exports rebase cells to the origin, preserve metadata, and always
   include SAUCE with cropped dimensions. They must not change the full
   document's canvas, save path, dirty state, or history.

@@ -1,4 +1,4 @@
-use crate::canvas::{Attributes, Canvas, Cell, Color};
+use crate::canvas::{Attributes, Canvas, Cell, Color, DEFAULT_WIDTH, MAX_CELLS};
 use crate::encoding::{decode_cp437, encode_char, Encoding};
 use crate::sauce::{self, Sauce};
 
@@ -84,7 +84,52 @@ pub fn load(
         .as_ref()
         .and_then(Sauce::dimensions)
         .unwrap_or((width, height));
+    parse_art(art, sauce, encoding, width, height, false)
+}
+
+/// Load artwork using SAUCE dimensions, or 80 columns and an inferred height.
+pub fn load_auto(bytes: &[u8], encoding: Encoding) -> Result<Document, String> {
+    let (art, sauce) = sauce::parse(bytes)?;
+    let width = sauce
+        .as_ref()
+        .and_then(Sauce::width)
+        .unwrap_or(DEFAULT_WIDTH);
+    let height = sauce.as_ref().and_then(Sauce::height);
+    parse_art(
+        art,
+        sauce,
+        encoding,
+        width,
+        height.unwrap_or(1),
+        height.is_none(),
+    )
+}
+
+fn parse_art(
+    art: &[u8],
+    sauce: Option<Sauce>,
+    encoding: Encoding,
+    width: usize,
+    height: usize,
+    automatic_height: bool,
+) -> Result<Document, String> {
     let mut canvas = Canvas::new(width, height).map_err(|e| e.to_string())?;
+    let height = if automatic_height {
+        MAX_CELLS / width
+    } else {
+        height
+    };
+    let mut used_height = 1;
+    let bound_row = |row: usize| {
+        if automatic_height && row >= height {
+            Err(format!(
+                "artwork exceeds the {MAX_CELLS}-cell limit at row {}",
+                row + 1
+            ))
+        } else {
+            Ok(row.min(height - 1))
+        }
+    };
     let (mut x, mut y, mut saved) = (0usize, 0usize, (0usize, 0usize));
     let mut style = Cell::default();
     let mut i = 0;
@@ -126,15 +171,15 @@ pub fn load(
                 match art[end] {
                     b'm' => sgr(&mut style, &params)?,
                     b'H' | b'f' => {
-                        y = number(&params, 0, 1).saturating_sub(1).min(height - 1);
+                        y = bound_row(number(&params, 0, 1).saturating_sub(1))?;
                         x = number(&params, 1, 1).saturating_sub(1).min(width - 1);
                     }
                     b'A' => y = y.saturating_sub(n),
-                    b'B' => y = y.saturating_add(n).min(height - 1),
+                    b'B' => y = bound_row(y.saturating_add(n))?,
                     b'C' => x = x.saturating_add(n).min(width - 1),
                     b'D' => x = x.saturating_sub(n).min(width - 1),
                     b'E' => {
-                        y = y.saturating_add(n).min(height - 1);
+                        y = bound_row(y.saturating_add(n))?;
                         x = 0;
                     }
                     b'F' => {
@@ -142,13 +187,17 @@ pub fn load(
                         x = 0;
                     }
                     b'G' => x = n.saturating_sub(1).min(width - 1),
-                    b'd' => y = n.saturating_sub(1).min(height - 1),
+                    b'd' => y = bound_row(n.saturating_sub(1))?,
                     b's' => saved = (x, y),
                     b'u' => (x, y) = saved,
                     b'J' if params[0] == 2 => {
                         canvas.clear(Cell::default());
                     }
                     b'K' if params[0] <= 2 => {
+                        if automatic_height {
+                            ensure_row(&mut canvas, y)?;
+                            used_height = used_height.max(y + 1);
+                        }
                         let start = if params[0] == 0 { x.min(width) } else { 0 };
                         let end = if params[0] == 1 {
                             x.saturating_add(1).min(width)
@@ -217,6 +266,10 @@ pub fn load(
                     y = y.saturating_add(1);
                 }
                 style.ch = ch;
+                if automatic_height {
+                    ensure_row(&mut canvas, y)?;
+                    used_height = used_height.max(y + 1);
+                }
                 if !canvas.set(x, y, style) {
                     return Err(format!("artwork exceeds the canvas at row {}; increase the fallback dimensions or correct SAUCE dimensions", y + 1));
                 }
@@ -224,9 +277,32 @@ pub fn load(
             }
         }
     }
+    if automatic_height && canvas.height() != used_height {
+        canvas
+            .resize(width, used_height)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(Document { canvas, sauce })
 }
 
+fn ensure_row(canvas: &mut Canvas, row: usize) -> Result<(), String> {
+    let needed = row
+        .checked_add(1)
+        .ok_or("artwork row exceeds the dimension limit")?;
+    let maximum = MAX_CELLS / canvas.width();
+    if needed > maximum {
+        return Err(format!(
+            "artwork exceeds the {MAX_CELLS}-cell limit at row {needed}"
+        ));
+    }
+    if needed > canvas.height() {
+        let height = needed.max(canvas.height().saturating_mul(2)).min(maximum);
+        canvas
+            .resize(canvas.width(), height)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 fn color_sgr(color: Color, fg: bool) -> Result<String, String> {
     let base = if fg { 30 } else { 40 };
     Ok(match color {
@@ -329,6 +405,63 @@ pub fn save_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_dimensions_follow_sauce_or_eighty_columns_and_rendered_rows() {
+        let doc = Document {
+            canvas: Canvas::new(4, 3).unwrap(),
+            sauce: Some(Sauce::default()),
+        };
+        let mut bytes = save(&doc, Encoding::Cp437).unwrap();
+        let loaded = load_auto(&bytes, Encoding::Cp437).unwrap();
+        assert_eq!((loaded.canvas.width(), loaded.canvas.height()), (4, 3));
+        let record = bytes.len() - 128;
+        bytes[record + 98..record + 100].fill(0);
+        let loaded = load_auto(&bytes, Encoding::Cp437).unwrap();
+        assert_eq!((loaded.canvas.width(), loaded.canvas.height()), (4, 3));
+        bytes[record + 96..record + 98].fill(0);
+        bytes[record + 98..record + 100].copy_from_slice(&7u16.to_le_bytes());
+        let loaded = load_auto(&bytes, Encoding::Cp437).unwrap();
+        assert_eq!((loaded.canvas.width(), loaded.canvas.height()), (80, 7));
+        let mut art = vec![b'X'; 81];
+        art.extend_from_slice(b"\r\n\r\n\x1b[30;2H\x1b[38;2;12;34;56m");
+        art.extend_from_slice("λ".as_bytes());
+        art.extend_from_slice(b"\r\n");
+        let loaded = load_auto(&art, Encoding::Utf8).unwrap();
+        assert_eq!((loaded.canvas.width(), loaded.canvas.height()), (80, 30));
+        assert_eq!(loaded.canvas.get(0, 1).unwrap().ch, 'X');
+        assert_eq!(loaded.canvas.get(1, 29).unwrap().ch, 'λ');
+        assert_eq!(loaded.canvas.get(1, 29).unwrap().fg, Color::Rgb(12, 34, 56));
+        let loaded = load_auto(b"A\r\n\r\nB\r\n", Encoding::Cp437).unwrap();
+        assert_eq!(loaded.canvas.height(), 3);
+        assert_eq!(loaded.canvas.get(0, 2).unwrap().ch, 'B');
+        assert_eq!(load_auto(b"", Encoding::Cp437).unwrap().canvas.height(), 1);
+        let loaded = load_auto(b"\x1b[40;1H\x1b[41m\x1b[2K", Encoding::Cp437).unwrap();
+        assert_eq!(loaded.canvas.height(), 40);
+        assert_eq!(loaded.canvas.get(0, 39).unwrap().bg, Color::Ansi(1));
+    }
+
+    #[test]
+    fn automatic_height_rejects_resource_overflow_and_malformed_artwork() {
+        let maximum_height = MAX_CELLS / DEFAULT_WIDTH;
+        let bytes = format!("\x1b[{maximum_height};1HX");
+        let doc = load_auto(bytes.as_bytes(), Encoding::Cp437).unwrap();
+        assert_eq!(doc.canvas.height(), maximum_height);
+        assert_eq!(doc.canvas.get(0, maximum_height - 1).unwrap().ch, 'X');
+        let too_tall = format!("\x1b[{};1HX", maximum_height + 1);
+        assert!(load_auto(too_tall.as_bytes(), Encoding::Cp437).is_err());
+        let mut overflowing = bytes.into_bytes();
+        overflowing.extend_from_slice(b"\r\nX");
+        assert!(load_auto(&overflowing, Encoding::Cp437).is_err());
+        assert!(load_auto(b"\x1b[", Encoding::Cp437).is_err());
+        assert!(load_auto(b"\xff", Encoding::Utf8).is_err());
+        // Explicit-size callers retain their previous bounds and UTF-8 behavior.
+        let doc = load("λ".as_bytes(), Encoding::Utf8, 5, 6).unwrap();
+        assert_eq!((doc.canvas.width(), doc.canvas.height()), (5, 6));
+        assert_eq!(doc.canvas.get(0, 0).unwrap().ch, 'λ');
+        assert!(load(b"A\r\nB", Encoding::Cp437, 5, 1).is_err());
+    }
+
     #[test]
     fn round_trip_styles_and_dimensions() {
         let mut canvas = Canvas::new(4, 2).unwrap();
