@@ -46,7 +46,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev \
             libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 \
-            libxcursor1 libxi6 libxrandr2 xvfb xauth dbus-x11
+            libxcursor1 libxi6 libxrandr2 xvfb xauth dbus-x11 \
+            desktop-file-utils shared-mime-info
       - name: Install Rust
         shell: bash
         env:
@@ -119,6 +120,12 @@ jobs:
             wait "$pid" || status=$?
             if [[ "${status:-0}" != 0 && "${status:-0}" != 143 ]]; then exit "$status"; fi
             trap - EXIT
+            # Finder-style launch delivers the file through an Apple Event.
+            grep -q ansi-art ADraw.app/Contents/Info.plist
+            open -n -a "$PWD/ADraw.app" examples/adraw-icon.ans
+            sleep 15
+            pid="$(pgrep -f "$PWD/ADraw.app/Contents/MacOS/adraw")"
+            kill "$pid"
           else
             test -x adraw
             ldd adraw | tee dependencies.txt
@@ -135,6 +142,16 @@ jobs:
               echo "Expected the editor to stay running; launch status: $status" >&2
               exit 1
             fi
+            test -x install.sh && test -s adraw.png
+            home="$RUNNER_TEMP/adraw-home"
+            entry="$home/.local/share/applications/io.github.mikehodgson.adraw.desktop"
+            env -u XDG_DATA_HOME HOME="$home" ./install.sh
+            cmp adraw "$home/.local/bin/adraw"
+            desktop-file-validate "$entry"
+            grep -qx 'text/x-ansi=io.github.mikehodgson.adraw.desktop;' \
+              "$home/.local/share/applications/mimeinfo.cache"
+            env -u XDG_DATA_HOME HOME="$home" ./install.sh --uninstall
+            test ! -e "$home/.local/bin/adraw" && test ! -e "$entry"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

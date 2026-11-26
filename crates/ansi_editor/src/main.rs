@@ -1,8 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod cli;
 mod font_library;
 mod glyph;
 mod image_export;
+#[cfg(target_os = "macos")]
+mod macos_open;
 mod updates;
 
 use ansi_core::{
@@ -215,10 +218,12 @@ struct CellClipboard {
     text: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum PendingAction {
     New,
     Open,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    OpenPath(PathBuf),
     Close,
 }
 
@@ -531,7 +536,7 @@ impl Editor {
 
     fn open(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("ANSI art", &["ans"])
+            .add_filter("ANSI art", &["ans", "asc"])
             .pick_file()
         else {
             return;
@@ -657,6 +662,7 @@ impl Editor {
         match action {
             PendingAction::New => self.new_image(),
             PendingAction::Open => self.open(),
+            PendingAction::OpenPath(path) => self.open_path(path),
             PendingAction::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }
@@ -1221,6 +1227,10 @@ fn color_controls(
 
 impl eframe::App for Editor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        for path in macos_open::take() {
+            self.request(PendingAction::OpenPath(path), ctx);
+        }
         self.ui(ctx);
     }
 
@@ -2190,7 +2200,7 @@ impl Editor {
                     }
                 });
         }
-        if let Some(action) = self.pending {
+        if let Some(action) = self.pending.clone() {
             egui::Window::new("Unsaved changes")
                 .collapsible(false)
                 .show(ctx, |ui| {
@@ -2425,7 +2435,49 @@ fn shortcut_text(ctx: &egui::Context, key: egui::Key) -> String {
     ctx.format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key))
 }
 
+fn font_definitions() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    #[cfg(target_os = "windows")]
+    for (name, path) in [
+        ("consolas", r"C:\Windows\Fonts\consola.ttf"),
+        ("symbols", r"C:\Windows\Fonts\seguisym.ttf"),
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts
+                .font_data
+                .insert(name.into(), egui::FontData::from_owned(bytes).into());
+            if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                if name == "consolas" {
+                    family.insert(0, name.into());
+                } else {
+                    family.push(name.into());
+                }
+            }
+            if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                family.push(name.into());
+            }
+        }
+    }
+    glyph::fonts(&mut fonts);
+    material_fonts(&mut fonts);
+    fonts
+}
+
 fn main() -> eframe::Result {
+    // Pre-Mavericks Finder launches add a process serial number argument.
+    let args = std::env::args_os()
+        .skip(1)
+        .filter(|arg| !(cfg!(target_os = "macos") && arg.to_string_lossy().starts_with("-psn_")));
+    let (path, encoding) = match cli::parse(args) {
+        Ok(cli::Command::Edit { path, encoding }) => (path, encoding),
+        command => {
+            #[cfg(windows)]
+            cli::attach_parent_console();
+            std::process::exit(cli::run(command, font_definitions()));
+        }
+    };
+    #[cfg(target_os = "macos")]
+    macos_open::install();
     let icon = eframe::icon_data::from_png_bytes(APP_ICON_PNG)
         .map_err(|error| eframe::Error::AppCreation(Box::new(error)))?;
     eframe::run_native(
@@ -2437,34 +2489,16 @@ fn main() -> eframe::Result {
                 .with_icon(icon),
             ..Default::default()
         },
-        Box::new(|cc| {
-            let mut fonts = egui::FontDefinitions::default();
-            #[cfg(target_os = "windows")]
-            for (name, path) in [
-                ("consolas", r"C:\Windows\Fonts\consola.ttf"),
-                ("symbols", r"C:\Windows\Fonts\seguisym.ttf"),
-            ] {
-                if let Ok(bytes) = std::fs::read(path) {
-                    fonts
-                        .font_data
-                        .insert(name.into(), egui::FontData::from_owned(bytes).into());
-                    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                        if name == "consolas" {
-                            family.insert(0, name.into());
-                        } else {
-                            family.push(name.into());
-                        }
-                    }
-                    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                        family.push(name.into());
-                    }
-                }
-            }
-            glyph::fonts(&mut fonts);
-            material_fonts(&mut fonts);
-            cc.egui_ctx.set_fonts(fonts);
+        Box::new(move |cc| {
+            cc.egui_ctx.set_fonts(font_definitions());
             let mut editor = Editor::new(cc.storage);
             editor.update_check = updates::UpdateCheck::start(cc.egui_ctx.clone());
+            editor.encoding = encoding;
+            if let Some(path) = path {
+                editor.open_path(path);
+            }
+            #[cfg(target_os = "macos")]
+            macos_open::set_context(cc.egui_ctx.clone());
             Ok(Box::new(editor))
         }),
     )
@@ -4283,6 +4317,24 @@ mod tests {
         editor.tdf_open = false;
         frame(&ctx, &mut editor, vec![egui::Event::Text("A".into())]);
         assert_eq!(editor.doc.canvas.get(1, 0).unwrap().ch, 'A');
+    }
+
+    #[test]
+    fn opening_a_requested_file_confirms_unsaved_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("my-screen.asc");
+        std::fs::write(&path, b"Hi").unwrap();
+        let ctx = context();
+        let mut editor = Editor {
+            dirty: true,
+            ..Editor::default()
+        };
+        editor.request(PendingAction::OpenPath(path.clone()), &ctx);
+        assert!(editor.path.is_none());
+        click_text(&ctx, &mut editor, "Discard");
+        assert_eq!(editor.path.as_deref(), Some(path.as_path()));
+        assert_eq!(editor.doc.canvas.get(1, 0).unwrap().ch, 'i');
+        assert!(!editor.dirty);
     }
 
     fn click_text(ctx: &egui::Context, editor: &mut Editor, text: &str) -> egui::FullOutput {

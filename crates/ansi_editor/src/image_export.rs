@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::Path};
 
 const MAX_PIXELS: usize = 32_000_000;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Png,
     Jpeg,

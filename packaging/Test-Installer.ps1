@@ -10,7 +10,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $registryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B97FA13A-0923-4C24-A6D5-7F5276293F19}_is1'
-if (Test-Path -LiteralPath $registryKey) {
+$contextMenuKeys = @('.ans', '.asc') | ForEach-Object { "HKCU:\Software\Classes\SystemFileAssociations\$_\shell\ADraw" }
+if ((Test-Path -LiteralPath $registryKey) -or ($contextMenuKeys | Where-Object { Test-Path -LiteralPath $_ })) {
     throw 'An ADraw installation already exists; do not run the smoke test against shared installer registration.'
 }
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('adraw-installer-test-' + [guid]::NewGuid().ToString('N'))
@@ -38,17 +39,27 @@ try {
     if ((Get-ItemProperty -LiteralPath $registryKey).DisplayVersion -ne $version) {
         throw 'Installer registration and executable product versions differ.'
     }
+    $expectedCommand = '"{0}" -- "%1"' -f (Join-Path $installDirectory 'adraw.exe')
+    foreach ($key in $contextMenuKeys) {
+        if ((Get-ItemProperty -LiteralPath $key).'(default)' -ne 'Open with ADraw' -or
+            (Get-ItemProperty -LiteralPath "$key\command").'(default)' -ne $expectedCommand) {
+            throw "Context-menu registration is missing or incorrect: $key"
+        }
+    }
     $artwork = Join-Path $installDirectory 'user-artwork.ans'
     Set-Content -LiteralPath $artwork -Value 'Saved artwork' -Encoding ascii
     $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
     if ($process.ExitCode -ne 0 -or (Test-Path -LiteralPath (Join-Path $installDirectory 'adraw.exe')) -or (Test-Path -LiteralPath $registryKey)) {
         throw "Uninstaller smoke test failed (exit $($process.ExitCode))."
     }
+    if ($contextMenuKeys | Where-Object { Test-Path -LiteralPath $_ }) {
+        throw 'Uninstall left context-menu registration behind.'
+    }
     if (-not (Test-Path -LiteralPath $artwork) -or (Get-Content -LiteralPath $artwork -Raw).Trim() -ne 'Saved artwork') {
         throw 'Uninstall removed or changed user artwork.'
     }
     $installed = $false
-    Write-Host "Installer payload, version $version, installation, uninstallation, and artwork preservation verified."
+    Write-Host "Installer payload, version $version, context menus, installation, uninstallation, and artwork preservation verified."
 }
 finally {
     if ($installed -and (Test-Path -LiteralPath $uninstaller)) {

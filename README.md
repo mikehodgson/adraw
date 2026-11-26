@@ -34,7 +34,10 @@ the [User guide](USER_GUIDE.md) for platform setup and security prompts.
 - A persistent TheDraw TDF font library with searchable selection and text previews.
 - Proportional zoom and a reorderable, collapsible sidebar.
 - ANSI file loading/saving and SAUCE artwork credits.
-- Rendered PNG and JPEG exports of the full artwork or active selection.
+- Rendered PNG and JPEG exports of the full artwork or active selection, plus
+  command-line conversion (`adraw --png my-screen.ans`).
+- **Open with ADraw** for `.ans` and `.asc` files from Explorer, Linux file
+  managers, and Finder.
 
 ## Learn more
 

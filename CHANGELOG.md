@@ -9,6 +9,19 @@ requested.
 
 ## [Unreleased]
 
+### Added
+
+- Astro marketing website with responsive screenshots, platform downloads,
+  live official-release information, and a searchable, task-focused user guide.
+- Command-line conversion of ANSI files to PNG or JPEG (`adraw --png FILE.ans`
+  or `adraw --jpeg FILE.ans`), writing each image beside its source with the
+  same name and a `.png` or `.jpg` extension. `adraw FILE.ans` opens the file
+  in the editor.
+- **Open with ADraw** for `.ans` and `.asc` files: an optional Windows
+  installer context-menu entry, a Linux `install.sh` that registers a desktop
+  entry and file type, and macOS Finder **Open With** support. The Open dialog
+  also lists `.asc` files.
+
 ## [0.3.0] - 2026-11-23
 
 ### Added

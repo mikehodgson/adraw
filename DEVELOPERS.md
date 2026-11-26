@@ -55,6 +55,12 @@ system registration. Packaging builds the locked MSVC x64 release with the
 static C runtime, then creates an installer, portable ZIP, and `SHA256SUMS.txt`
 under `target\dist`. No runtime build tools are required by users.
 
+The installer's optional `contextmenu` task registers per-user
+`Software\Classes\SystemFileAssociations\.ans` and `.asc` `shell\ADraw`
+verbs that run `adraw.exe -- "%1"`; `Test-Installer.ps1` checks they are
+created and removed. Do not run `Test-Installer.ps1` on a machine where ADraw
+is already installed.
+
 The workspace release profile favors executable size (`opt-level = "z"`),
 uses ThinLTO and one codegen unit, and strips symbols. These settings apply
 to local release builds and CI packaging; debug builds are unchanged.
@@ -150,10 +156,20 @@ macOS builds set the deployment target to 11.0, bundle an icon and versioned
 Info.plist, and apply/verify an ad-hoc signature. They are not notarized or
 Developer ID signed. No signing credentials are required.
 
+Linux archives include `install.sh` (from `packaging/linux-install.sh`), which
+installs per user under `~/.local` with a desktop entry, a `text/x-ansi` MIME
+type for `*.ans` and `*.asc`, and an icon; `--uninstall` removes them. The
+macOS Info.plist declares an imported `io.github.mikehodgson.adraw.ansi-art`
+type and an Alternate-rank editor document type. `macos_open.rs` installs the
+open-documents Apple Event handler before AppKit finishes launching, because
+winit does not forward Finder open requests.
+
 Package checks verify checksums, archive contents, executable permissions,
 macOS architecture/plist/signature, and dynamic dependencies. Linux launches
 the extracted executable under Xvfb with software OpenGL; macOS launches the
-extracted app executable. Both must remain running for 15 seconds. These
+extracted app executable. Both must remain running for 15 seconds. CI also
+runs `install.sh` in a temporary home directory and opens example artwork with
+`open -a ADraw.app`. These
 checks do not replace interactive testing of platform file dialogs, clipboard,
 Wayland, accessibility, or Gatekeeper on downloaded apps.
 CI artifacts are retained for inspection; only version-tag runs publish releases.
@@ -179,6 +195,14 @@ changed behavior, and use targeted tests while iterating. Core tests cover
 canvas/history operations, byte encodings, synthetic SAUCE fixtures, and ANSI
 round trips. Editor tests exercise input routing, selections, menus, palettes,
 zoom, and rendering through egui input/output.
+
+### Marketing website
+
+The standalone [website](adraw-website/) uses Astro, Tailwind CSS, and Preline UI.
+See its [README](adraw-website/README.md) for Node requirements, local preview,
+release data, and static hosting. From `adraw-website`, run `npm ci`, `npm test`,
+and `npm run build`. Website-only changes do not require rebuilding the Rust
+workspace.
 
 ### Optional TDF collection test
 
@@ -212,6 +236,8 @@ use the product name **ADraw**.
 | [font_library.rs](crates/ansi_editor/src/font_library.rs) | Persistent, validated TDF imports and startup font-library loading. |
 | [updates.rs](crates/ansi_editor/src/updates.rs) | Background official-release checks and dismissible download notifications. |
 | [image_export.rs](crates/ansi_editor/src/image_export.rs) | Bounded native-resolution PNG/JPEG rendering and atomic export writes. |
+| [cli.rs](crates/ansi_editor/src/cli.rs) | Command-line parsing: a bare file opens the editor; `--png`/`--jpeg` convert beside each source file without the GUI. |
+| [macos_open.rs](crates/ansi_editor/src/macos_open.rs) | macOS Apple Event (`odoc`) handler that forwards Finder **Open With** requests to the editor. |
 | [glyph.rs](crates/ansi_editor/src/glyph.rs) | IBM VGA bitmap rendering for all CP437 glyphs and shared cell geometry. |
 
 The startup release check runs once on a worker thread, using the official

@@ -30,9 +30,19 @@ RestartApplications=no
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "contextmenu"; Description: "Add ""Open with ADraw"" to the context menu for .ans and .asc files"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+; Per-file-type verbs leave each extension's default program unchanged.
+Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.ans\shell\ADraw"; ValueType: string; ValueName: ""; ValueData: "Open with ADraw"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.ans\shell\ADraw"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\adraw.exe,0"; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.ans\shell\ADraw\command"; ValueType: string; ValueName: ""; ValueData: """{app}\adraw.exe"" -- ""%1"""; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.asc\shell\ADraw"; ValueType: string; ValueName: ""; ValueData: "Open with ADraw"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.asc\shell\ADraw"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\adraw.exe,0"; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.asc\shell\ADraw\command"; ValueType: string; ValueName: ""; ValueData: """{app}\adraw.exe"" -- ""%1"""; Tasks: contextmenu
 
 [Icons]
 Name: "{autoprograms}\ADraw"; Filename: "{app}\adraw.exe"

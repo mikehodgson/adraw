@@ -56,6 +56,20 @@ if [[ "$platform" == macos-* ]]; then
 <key>CFBundleIconFile</key><string>adraw.icns</string>
 <key>LSMinimumSystemVersion</key><string>${MACOSX_DEPLOYMENT_TARGET:-11.0}</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>CFBundleDocumentTypes</key><array><dict>
+<key>CFBundleTypeName</key><string>ANSI art</string>
+<key>CFBundleTypeRole</key><string>Editor</string>
+<key>LSHandlerRank</key><string>Alternate</string>
+<key>LSItemContentTypes</key><array><string>io.github.mikehodgson.adraw.ansi-art</string></array>
+</dict></array>
+<key>UTImportedTypeDeclarations</key><array><dict>
+<key>UTTypeIdentifier</key><string>io.github.mikehodgson.adraw.ansi-art</string>
+<key>UTTypeDescription</key><string>ANSI art</string>
+<key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+<key>UTTypeTagSpecification</key><dict>
+<key>public.filename-extension</key><array><string>ans</string><string>asc</string></array>
+</dict>
+</dict></array>
 </dict></plist>
 EOF
     for size in 16 32 128 256 512; do
@@ -73,6 +87,9 @@ EOF
 else
     cp "$target_dir/$target/release/adraw" "$payload/adraw"
     chmod 755 "$payload/adraw"
+    cp packaging/linux-install.sh "$payload/install.sh"
+    chmod 755 "$payload/install.sh"
+    cp crates/ansi_editor/assets/adraw.png "$payload/adraw.png"
 fi
 
 archive="$dist/$name.tar.gz"

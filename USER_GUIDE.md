@@ -175,6 +175,44 @@ editing. Exports are limited to 32 megapixels; select a smaller area if needed.
 Characters missing from the available display fonts produce an actionable error
 rather than a substituted glyph.
 
+### Convert from the command line
+
+`adraw my-screen.ans` opens the file in the editor. Add `--png` or `--jpeg`
+to convert ANSI files to images without opening the editor:
+
+```text
+adraw --png my-screen.ans        # writes my-screen.png
+adraw --jpeg art/*.ans           # writes art/<name>.jpg for each file
+```
+
+Each image is written beside its source with the same name, changing only the
+extension to `.png` or `.jpg` and replacing an existing image of that name.
+Files are read as CP437; add `--utf8` for UTF-8 artwork. Put `--` before file
+names that start with `-`.
+The full canvas is rendered exactly as **File > Export** does. Each converted
+file is listed; unreadable or invalid files are reported and the command exits
+with a non-zero status after converting the rest. Run `adraw --help` for all
+options. On Windows, PowerShell and Command Prompt do not wait for ADraw to
+finish; use `Start-Process adraw -ArgumentList '--png','my-screen.ans' -Wait`
+in scripts.
+
+### Open from your file manager
+
+ADraw can appear as an **Open with ADraw** choice for `.ans` and `.asc` files.
+It does not replace your default program for these files.
+
+- **Windows:** the installer adds **Open with ADraw** to the Explorer context
+  menu (the **Add "Open with ADraw" to the context menu** option, on by
+  default). On Windows 11, choose **Show more options** to see it. Uninstalling
+  removes it. The portable ZIP does not register the menu entry.
+- **Linux:** from the extracted directory, run `./install.sh`. It installs
+  ADraw for your user in `~/.local/bin`, adds a desktop menu entry, and offers
+  ADraw under **Open With** for `.ans` and `.asc` files. Add `~/.local/bin` to
+  your `PATH` to run `adraw` from a terminal. Run `./install.sh --uninstall`
+  to remove it.
+- **macOS:** after moving `ADraw.app` to Applications, choose
+  **Open With > ADraw** from a file's Finder context menu.
+
 ## SAUCE artwork credits
 
 The **SAUCE metadata** section holds your title, author, group, and comments.
