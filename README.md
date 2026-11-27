@@ -30,6 +30,7 @@ the [User guide](USER_GUIDE.md) for platform setup and security prompts.
 - Custom canvas sizes, character brushes, and direct keyboard editing.
 - CP437 and UTF-8 support, with a bundled IBM VGA 9x16 display font.
 - 16-color, 256-color, and truecolor palettes, plus swatches of artwork colors.
+- Recolor selections with a single color or a start-to-end color gradient.
 - Selections, drag-to-move, styled copy/paste, undo/redo, and selection-only saves.
 - A persistent TheDraw TDF font library with searchable selection and text previews.
 - Proportional zoom and a reorderable, collapsible sidebar.

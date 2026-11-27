@@ -10,21 +10,26 @@ Uninstall through **Windows Settings > Apps**; uninstall and upgrades leave
 your saved artwork, preferences, and imported fonts intact.
 The portable ZIP requires no installation; extract it and run `adraw.exe`.
 Both distributions include the display font, documentation, and license notices.
+Windows also needs a DirectX 12, Vulkan, or OpenGL 3.3-capable graphics driver.
 
 Linux and macOS packages are available from 0.3.0:
 
 - **Linux:** choose `linux-x64` or `linux-arm64`, extract the `.tar.gz`,
   and run `./adraw` from the extracted directory. Use Ubuntu 22.04 or a
-  compatible newer desktop with glibc 2.35+, OpenGL, and X11 or Wayland.
-  File dialogs require a running D-Bus session and `xdg-desktop-portal` with
-  a desktop backend (such as `xdg-desktop-portal-gtk` or the KDE equivalent).
+  compatible newer desktop with glibc 2.35+, X11 or Wayland, and a Vulkan
+  or OpenGL-capable graphics driver (OpenGL 3.3 or OpenGL ES 3.0 or newer).
+  File dialogs use `libdbus-1`, a running D-Bus session, and
+  `xdg-desktop-portal` with a desktop backend (such as
+  `xdg-desktop-portal-gtk` or the KDE equivalent). Install `zenity` as a
+  fallback when the portal is unavailable.
   On Ubuntu, install missing runtime packages with
-  `sudo apt install libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libxcursor1 libxi6 libxrandr2 xdg-desktop-portal xdg-desktop-portal-gtk`.
+  `sudo apt install libvulkan1 mesa-vulkan-drivers libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libxcursor1 libxi6 libxrandr2 libdbus-1-3 xdg-desktop-portal xdg-desktop-portal-gtk zenity`.
   These are not static binaries or AppImages.
 - **macOS:** choose `macos-arm64` for Apple Silicon or `macos-x64` for Intel,
   extract the `.tar.gz`, and move `ADraw.app` to Applications.
-  macOS 11 or newer is required. Apps have an ad-hoc signature, not a
-  Developer ID signature or Apple notarization. After attempting to open a
+  macOS 11 or newer and a Metal-capable graphics device are required. Apps
+  have an ad-hoc signature, not a Developer ID signature or Apple notarization.
+  After attempting to open a
   trusted official download, use **System Settings > Privacy & Security >
   Open Anyway** if macOS blocks it. Do not disable Gatekeeper globally.
 
@@ -74,7 +79,8 @@ To resize an existing image, set the new dimensions in **Canvas**, then choose
 **Resize canvas**. Use **Edit > Undo** or **Ctrl+Z** to undo a resize.
 
 The startup window fits the default canvas and sidebar. You can resize the
-window; larger or zoomed artwork scrolls rather than changing the image size.
+window; it also fits an 80-column canvas with the minimap open. Larger or
+zoomed artwork scrolls rather than changing the image size.
 
 ## Draw and type
 
@@ -83,6 +89,11 @@ beside it. CP437 characters use the bundled **IBM VGA 9x16** font; no font
 installation is needed.
 
 Choose **Draw** in the sidebar, then click or drag on the canvas to paint.
+Choose **Eyedropper** (also in the **Edit** menu) to pick up colors from the
+artwork: **left-click** a cell to use its foreground color, **right-click** to
+use its background color. The picked color is the one shown on screen, so
+bold or blinking text and inverse cells give their displayed colors. The
+artwork does not change.
 To type directly, click a cell and enter text. Typed characters use your brush
 colors and attributes.
 
@@ -108,10 +119,51 @@ current brush colors.
   swatch to open the foreground/background RGB picker. Opening a picker does
   not change the selected color until you choose another.
 
-The **Used colors** palette below the 16-color swatches shows foreground and
-background colors currently used in your artwork. Reuse them with the same
-left/right-click controls. Colors appear or disappear as you edit, undo,
-paste, or open another image. Large color sets can be scrolled.
+The **Used colors** palette below the 16-color swatches lists the colors you
+have picked this session, in the order you first picked them: palette and
+eyedropper picks, RGB picker colors (added when the picker closes), and
+gradient end colors. Colors in your artwork are not listed unless you pick
+them. Reuse them with the same left/right-click controls. The list is cleared
+when ADraw closes. Large color sets can be scrolled.
+
+With an active selection, choosing a foreground or background color from any
+palette or the RGB picker also recolors every cell in the selection, keeping
+its characters, attributes, and the other color. Each choice is one undo step;
+adjusting the RGB picker continuously also undoes in one step.
+
+### Color gradients
+
+Hold **Ctrl** (**Cmd** on macOS) while clicking a color to fade the
+selection's colors instead of filling them:
+
+1. Set the start color as your normal foreground or background.
+2. Select an area by dragging from where the gradient should start to where
+   it should end.
+3. **Ctrl+left-click** a color to fade the foreground, or **Ctrl+right-click**
+   to fade the background, from the current color to the clicked one. This
+   works in every palette. **Ctrl+click** the RGB button or a current-color
+   swatch to choose the end color with the RGB picker; the selection updates
+   as you adjust it. In an RGB picker that is already open, hold **Ctrl**
+   while clicking or dragging to switch it to choosing the end color.
+
+Your brush colors do not change, so you can Ctrl+click other end colors to
+compare. The gradient follows the direction you dragged: the cell where you
+started the selection gets the start color, the cell where you released gets
+the end color, and each cell in between gets the color for its position along
+that line. Drag left to right for a horizontal gradient, top to bottom for a
+vertical one, or corner to corner for a diagonal one. Moving the selection
+keeps its direction; **Select all** runs from the top-left to the bottom-right.
+
+While a selection is active, the **Gradient** row under the colors sets the
+direction: follow the selection drag, left to right, or top to bottom. The
+reverse button swaps which end gets the start color. Changing these redraws
+the selection's latest gradient in place, still as a single undo step, and
+applies to later gradients too.
+
+The gradient uses the richest palette of its two colors: two 16-color
+endpoints give a 16-color gradient, a 256-color endpoint gives nearest
+256-color steps, and an RGB endpoint gives smooth truecolor. Characters,
+attributes, and the other color are kept. Each gradient is one undo step.
 
 Use the **Attributes** buttons to change bold, blink/iCE, underline, or inverse
 colors. Blink attributes are saved but are not animated in the editor.
@@ -239,6 +291,15 @@ resets it. The **View** menu offers the same commands.
 Zoom ranges from **50% to 400%**, preserving proportions without changing the
 saved artwork. Scrollbars appear whenever needed. At 100%, images taller than
 50 rows always have a vertical scrollbar.
+
+Choose **View > Show minimap** to show or hide an overview of the entire
+canvas on the right. The outlined rectangle shows the visible portion and
+follows scrolling and zooming without tinting the artwork. Click the minimap
+to jump to a location, or drag the rectangle to scroll. The minimap can
+navigate horizontally as well as vertically. Drag its left edge to resize
+the overview; the cached artwork scales while the viewport outline stays
+in sync. Drawing updates only the changed preview region to keep editing
+responsive. Your visibility choice is remembered between sessions.
 
 ## Arrange the sidebar
 

@@ -161,15 +161,17 @@ pub fn load(bytes: &[u8]) -> Result<Vec<Font>, String> {
         let mut glyphs = Vec::with_capacity(94);
         let mut line_height = 1;
         let mut offsets: Vec<usize> = header[25..]
-            .chunks_exact(2)
-            .map(|offset| u16::from_le_bytes([offset[0], offset[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|offset| u16::from_le_bytes(*offset))
             .filter(|&offset| offset != u16::MAX)
             .map(usize::from)
             .collect();
         offsets.sort_unstable();
         offsets.dedup();
-        for (index, offset) in header[25..].chunks_exact(2).enumerate() {
-            let offset = u16::from_le_bytes([offset[0], offset[1]]);
+        for (index, offset) in header[25..].as_chunks::<2>().0.iter().enumerate() {
+            let offset = u16::from_le_bytes(*offset);
             if offset == u16::MAX {
                 glyphs.push(None);
                 continue;

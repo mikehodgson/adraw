@@ -88,7 +88,7 @@ pub fn parse(data: &[u8]) -> Result<(&[u8], Option<Sauce>), String> {
         if &data[start..start + 5] != b"COMNT" {
             return Err("missing SAUCE COMNT block".into());
         }
-        for line in data[start + 5..record_start].chunks_exact(64) {
+        for line in data[start + 5..record_start].as_chunks::<64>().0 {
             comments.push(text(line));
         }
         art_end = start;

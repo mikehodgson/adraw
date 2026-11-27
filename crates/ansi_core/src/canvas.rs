@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 pub const MAX_CELLS: usize = 1_000_000;
@@ -9,6 +10,49 @@ pub enum Color {
     Ansi(u8),
     Indexed(u8),
     Rgb(u8, u8, u8),
+}
+
+/// RGB values of the 16 standard ANSI colors.
+pub const ANSI_PALETTE: [[u8; 3]; 16] = [
+    [0, 0, 0],
+    [170, 0, 0],
+    [0, 170, 0],
+    [170, 85, 0],
+    [0, 0, 170],
+    [170, 0, 170],
+    [0, 170, 170],
+    [170, 170, 170],
+    [85, 85, 85],
+    [255, 85, 85],
+    [85, 255, 85],
+    [255, 255, 85],
+    [85, 85, 255],
+    [255, 85, 255],
+    [85, 255, 255],
+    [255, 255, 255],
+];
+
+impl Color {
+    /// The displayed RGB value; out-of-range ANSI colors show as magenta.
+    pub fn rgb(self) -> [u8; 3] {
+        match self {
+            Color::Ansi(n) => ANSI_PALETTE
+                .get(n as usize)
+                .copied()
+                .unwrap_or([255, 0, 255]),
+            Color::Indexed(n @ 0..=15) => ANSI_PALETTE[n as usize],
+            Color::Indexed(n @ 16..=231) => {
+                let n = n - 16;
+                let component = |v| if v == 0 { 0 } else { 55 + 40 * v };
+                [component(n / 36), component((n / 6) % 6), component(n % 6)]
+            }
+            Color::Indexed(n) => {
+                let v = 8 + 10 * (n - 232);
+                [v, v, v]
+            }
+            Color::Rgb(r, g, b) => [r, g, b],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -139,6 +183,7 @@ impl Canvas {
 pub struct History {
     undo: Vec<Edit>,
     redo: Vec<Edit>,
+    revision: u64,
 }
 
 enum Edit {
@@ -170,7 +215,57 @@ impl History {
         }
         self.undo.push(Edit::Paint(changes));
         self.redo.clear();
+        self.revision += 1;
         true
+    }
+
+    /// Changes every time the canvas is edited, undone, or redone.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Paints cells as part of the most recent paint edit, so continuous
+    /// adjustments undo in one step. Falls back to a new edit when the last
+    /// edit is not a paint or `revision` no longer matches.
+    pub fn paint_many_merged(
+        &mut self,
+        canvas: &mut Canvas,
+        cells: impl IntoIterator<Item = (usize, usize, Cell)>,
+        revision: u64,
+    ) -> bool {
+        if revision != self.revision || !self.redo.is_empty() {
+            return self.paint_many(canvas, cells);
+        }
+        let Some(Edit::Paint(changes)) = self.undo.last_mut() else {
+            return self.paint_many(canvas, cells);
+        };
+        let mut index: HashMap<_, _> = changes
+            .iter()
+            .enumerate()
+            .map(|(i, change)| ((change.0, change.1), i))
+            .collect();
+        let mut changed = false;
+        for (x, y, cell) in cells {
+            let Some(&old) = canvas.get(x, y) else {
+                continue;
+            };
+            if old == cell {
+                continue;
+            }
+            canvas.set(x, y, cell);
+            changed = true;
+            match index.get(&(x, y)) {
+                Some(&i) => changes[i].3 = cell,
+                None => {
+                    index.insert((x, y), changes.len());
+                    changes.push((x, y, old, cell));
+                }
+            }
+        }
+        if changed {
+            self.revision += 1;
+        }
+        changed
     }
     pub fn resize(
         &mut self,
@@ -186,6 +281,7 @@ impl History {
         let previous = std::mem::replace(canvas, next);
         self.undo.push(Edit::Resize(previous));
         self.redo.clear();
+        self.revision += 1;
         Ok(true)
     }
     pub fn undo(&mut self, canvas: &mut Canvas) -> bool {
@@ -199,6 +295,7 @@ impl History {
                 Edit::Resize(previous) => std::mem::swap(canvas, previous),
             }
             self.redo.push(edit);
+            self.revision += 1;
             return true;
         }
         false
@@ -214,6 +311,7 @@ impl History {
                 Edit::Resize(next) => std::mem::swap(canvas, next),
             }
             self.undo.push(edit);
+            self.revision += 1;
             return true;
         }
         false
@@ -265,5 +363,33 @@ mod tests {
         history.redo(&mut canvas);
         history.redo(&mut canvas);
         assert_eq!(canvas.width(), 1);
+    }
+
+    #[test]
+    fn merged_paints_undo_together_only_while_revision_is_current() {
+        let mut canvas = Canvas::new(2, 1).unwrap();
+        let mut history = History::default();
+        let colored = |n| Cell {
+            fg: Color::Rgb(n, 0, 0),
+            ..Cell::default()
+        };
+        history.paint_many(&mut canvas, [(0, 0, colored(1)), (1, 0, colored(1))]);
+        let revision = history.revision();
+        assert!(history.paint_many_merged(&mut canvas, [(0, 0, colored(2))], revision));
+        let revision = history.revision();
+        assert!(history.paint_many_merged(&mut canvas, [(1, 0, colored(3))], revision));
+        history.undo(&mut canvas);
+        assert_eq!(*canvas.get(0, 0).unwrap(), Cell::default());
+        assert_eq!(*canvas.get(1, 0).unwrap(), Cell::default());
+        history.redo(&mut canvas);
+        assert_eq!(*canvas.get(0, 0).unwrap(), colored(2));
+        assert_eq!(*canvas.get(1, 0).unwrap(), colored(3));
+
+        let stale = history.revision();
+        history.paint(&mut canvas, 0, 0, colored(4));
+        assert!(history.paint_many_merged(&mut canvas, [(1, 0, colored(5))], stale));
+        history.undo(&mut canvas);
+        assert_eq!(*canvas.get(0, 0).unwrap(), colored(4));
+        assert_eq!(*canvas.get(1, 0).unwrap(), colored(3));
     }
 }

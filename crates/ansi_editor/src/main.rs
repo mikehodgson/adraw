@@ -6,27 +6,33 @@ mod glyph;
 mod image_export;
 #[cfg(target_os = "macos")]
 mod macos_open;
+mod minimap;
 mod updates;
 
 use ansi_core::{
     ans_io::{self, Document},
     canvas::{Canvas, Cell, Color, History, DEFAULT_HEIGHT, DEFAULT_WIDTH},
     encoding::{decode_cp437, Encoding},
+    gradient::{gradient_at, GradientPalette},
     sauce::Sauce,
     tdf,
 };
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Vec2};
 use egui_material_icons::icons::{
-    ICON_ADD, ICON_APPS, ICON_BRUSH, ICON_CENTER_FOCUS_STRONG, ICON_CHEVRON_RIGHT,
-    ICON_CONTENT_COPY, ICON_CONTENT_CUT, ICON_DRAG_HANDLE, ICON_EXPAND_MORE, ICON_FLASH_ON,
-    ICON_FORMAT_BOLD, ICON_FORMAT_UNDERLINED, ICON_GRID_VIEW, ICON_PALETTE, ICON_SEARCH,
-    ICON_SELECT_ALL, ICON_SWAP_HORIZ, ICON_ZOOM_IN, ICON_ZOOM_OUT,
+    ICON_ADD, ICON_APPS, ICON_BRUSH, ICON_CENTER_FOCUS_STRONG, ICON_CHEVRON_RIGHT, ICON_COLORIZE,
+    ICON_CONTENT_COPY, ICON_CONTENT_CUT, ICON_DRAG_HANDLE, ICON_EAST, ICON_EXPAND_MORE,
+    ICON_FLASH_ON, ICON_FORMAT_BOLD, ICON_FORMAT_UNDERLINED, ICON_GRID_VIEW, ICON_NORTH,
+    ICON_NORTH_WEST, ICON_PALETTE, ICON_SEARCH, ICON_SELECT_ALL, ICON_SOUTH, ICON_SOUTH_EAST,
+    ICON_SWAP_HORIZ, ICON_SYNC_ALT, ICON_WEST, ICON_ZOOM_IN, ICON_ZOOM_OUT,
 };
-use std::{collections::BTreeMap, path::PathBuf};
+use egui_material_icons::MaterialIcon;
+use std::path::PathBuf;
 
-const DEFAULT_WINDOW_SIZE: Vec2 = Vec2::new(1006.0, 652.0);
+const MINIMAP_DEFAULT_WIDTH: f32 = 180.0;
+const DEFAULT_WINDOW_SIZE: Vec2 = Vec2::new(1006.0 + MINIMAP_DEFAULT_WIDTH, 692.0);
 const SIDEBAR_ORDER_KEY: &str = "sidebar_order_v1";
 const SIDEBAR_COLLAPSED_KEY: &str = "sidebar_collapsed_v1";
+const MINIMAP_VISIBLE_KEY: &str = "minimap_visible_v1";
 const APP_ICON_PNG: &[u8] = include_bytes!("../assets/adraw.png");
 const GITHUB_PAGE: &str = "https://github.com/mikehodgson/adraw";
 const ZOOM_LEVELS: [u16; 8] = [50, 75, 100, 125, 150, 200, 300, 400];
@@ -40,41 +46,9 @@ const REDO_SHORTCUT: egui::KeyboardShortcut = if cfg!(target_os = "macos") {
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y)
 };
 
-const PALETTE: [[u8; 3]; 16] = [
-    [0, 0, 0],
-    [170, 0, 0],
-    [0, 170, 0],
-    [170, 85, 0],
-    [0, 0, 170],
-    [170, 0, 170],
-    [0, 170, 170],
-    [170, 170, 170],
-    [85, 85, 85],
-    [255, 85, 85],
-    [85, 255, 85],
-    [255, 255, 85],
-    [85, 85, 255],
-    [255, 85, 255],
-    [85, 255, 255],
-    [255, 255, 255],
-];
-
 fn display_color(color: Color) -> Color32 {
-    let rgb = match color {
-        Color::Ansi(n) => PALETTE.get(n as usize).copied().unwrap_or([255, 0, 255]),
-        Color::Indexed(n @ 0..=15) => PALETTE[n as usize],
-        Color::Indexed(n @ 16..=231) => {
-            let n = n - 16;
-            let component = |v| if v == 0 { 0 } else { 55 + 40 * v };
-            [component(n / 36), component((n / 6) % 6), component(n % 6)]
-        }
-        Color::Indexed(n) => {
-            let v = 8 + 10 * (n - 232);
-            [v, v, v]
-        }
-        Color::Rgb(r, g, b) => [r, g, b],
-    };
-    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+    let [r, g, b] = color.rgb();
+    Color32::from_rgb(r, g, b)
 }
 
 struct Editor {
@@ -83,6 +57,8 @@ struct Editor {
     about_logo: Option<egui::TextureHandle>,
     sidebar_order: Vec<SidebarSection>,
     sidebar_collapsed: Vec<SidebarSection>,
+    minimap_visible: bool,
+    minimap: minimap::Minimap,
     doc: Document,
     history: History,
     brush: Cell,
@@ -99,6 +75,18 @@ struct Editor {
     selecting: bool,
     selection: Option<Selection>,
     selection_drag: Option<SelectionDrag>,
+    /// RGB picker target and history revision of its latest selection recolor.
+    recolor_merge: Option<(RgbTarget, u64)>,
+    gradient_direction: GradientDirection,
+    gradient_reversed: bool,
+    last_gradient: Option<LastGradient>,
+    /// Colors picked this session, listed under Used colors.
+    picked_colors: Vec<Color>,
+    /// Brush colors as of the last remembered pick.
+    remembered_brush: (Color, Color),
+    rgb_open: bool,
+    pending_gradient_end: Option<Color>,
+    eyedropper: bool,
     clipboard: Option<CellClipboard>,
     tdf_open: bool,
     tdf_library: font_library::FontLibrary,
@@ -169,7 +157,7 @@ impl SidebarSection {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Selection {
     start: (usize, usize),
     end: (usize, usize),
@@ -189,6 +177,26 @@ impl Selection {
         let (left, top, right, bottom) = self.bounds();
         x >= left && x <= right && y >= top && y <= bottom
     }
+}
+
+/// Which way selection gradients run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum GradientDirection {
+    /// From where the selection drag began to where it was released.
+    #[default]
+    Drag,
+    LeftToRight,
+    TopToBottom,
+}
+
+/// The most recent selection gradient, so changing its direction can
+/// replace it within the same undo step.
+#[derive(Clone, Copy, Debug)]
+struct LastGradient {
+    pick: GradientPick,
+    start: Color,
+    selection: Selection,
+    revision: u64,
 }
 
 struct SelectionDrag {
@@ -235,6 +243,8 @@ impl Default for Editor {
             about_logo: None,
             sidebar_order: SidebarSection::ALL.to_vec(),
             sidebar_collapsed: Vec::new(),
+            minimap_visible: false,
+            minimap: minimap::Minimap::default(),
             doc: Document {
                 canvas: Canvas::new(DEFAULT_WIDTH, DEFAULT_HEIGHT).unwrap(),
                 sauce: Some(Sauce::default()),
@@ -257,6 +267,15 @@ impl Default for Editor {
             selecting: false,
             selection: None,
             selection_drag: None,
+            recolor_merge: None,
+            gradient_direction: GradientDirection::default(),
+            gradient_reversed: false,
+            last_gradient: None,
+            picked_colors: Vec::new(),
+            remembered_brush: (Cell::default().fg, Cell::default().bg),
+            rgb_open: false,
+            pending_gradient_end: None,
+            eyedropper: false,
             clipboard: None,
             tdf_open: false,
             tdf_library: font_library::FontLibrary::default(),
@@ -288,9 +307,20 @@ impl Editor {
             if let Some(saved) = storage.get_string(SIDEBAR_COLLAPSED_KEY) {
                 editor.sidebar_collapsed = SidebarSection::known(&saved);
             }
+            if let Some(saved) = storage.get_string(MINIMAP_VISIBLE_KEY) {
+                match saved.parse::<bool>() {
+                    Ok(visible) => editor.minimap_visible = visible,
+                    Err(_) => {
+                        editor.message = Some(
+                            "The saved minimap preference is invalid. Choose View > Show minimap to set it again."
+                                .into(),
+                        );
+                    }
+                }
+            }
         } else {
             editor.message = Some(
-                "Sidebar preferences cannot be saved: application settings storage is unavailable. Check access to your user profile's application data folder."
+                "Sidebar and minimap preferences cannot be saved: application settings storage is unavailable. Check access to your user profile's application data folder."
                     .into(),
             );
         }
@@ -363,7 +393,7 @@ impl Editor {
                 let picker = icon_button(ui, ICON_SEARCH, "Drag to zoom", false);
                 let popup_id = ui.make_persistent_id("zoom_slider");
                 if picker.clicked() {
-                    ui.memory_mut(|memory| memory.toggle_popup(popup_id));
+                    egui::Popup::toggle_id(ui.ctx(), popup_id);
                 }
                 if ui
                     .add_enabled_ui(self.zoom_percent < 400.0, |ui| {
@@ -393,12 +423,11 @@ impl Editor {
                     self.zoom_percent = DEFAULT_ZOOM_PERCENT;
                 }
                 ui.label(format!("{:.0}%", self.zoom_percent));
-                egui::popup::popup_below_widget(
-                    ui,
-                    popup_id,
-                    &picker,
-                    egui::popup::PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
+                egui::Popup::from_response(&picker)
+                    .id(popup_id)
+                    .open_memory(None)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
                         ui.set_width(240.0);
                         ui.spacing_mut().slider_width = 240.0;
                         ui.strong(format!("Zoom: {:.0}%", self.zoom_percent));
@@ -435,8 +464,7 @@ impl Editor {
                                 },
                             );
                         });
-                    },
-                );
+                    });
             });
         });
     }
@@ -525,6 +553,7 @@ impl Editor {
                 self.width = DEFAULT_WIDTH;
                 self.height = DEFAULT_HEIGHT;
                 self.history = History::default();
+                self.minimap.invalidate();
                 self.dirty = false;
                 self.cursor = (0, 0);
                 self.selection = None;
@@ -554,6 +583,7 @@ impl Editor {
                 self.height = doc.canvas.height();
                 self.doc = doc;
                 self.history = History::default();
+                self.minimap.invalidate();
                 self.path = Some(path);
                 self.dirty = false;
                 self.cursor = (0, 0);
@@ -646,7 +676,7 @@ impl Editor {
     }
 
     fn rendered_image(&self, ctx: &egui::Context) -> Result<image::RgbImage, String> {
-        let definitions = ctx.fonts(|fonts| fonts.lock().fonts.definitions().clone());
+        let definitions = ctx.fonts(|fonts| fonts.definitions().clone());
         image_export::render(&self.doc, self.selection, definitions)
     }
 
@@ -724,9 +754,11 @@ impl Editor {
                 point.1,
                 self.doc.canvas.height() - height,
             );
+            // Translate the corners so the selection keeps its drag direction.
+            let shift = |corner: (usize, usize)| (corner.0 - left + x, corner.1 - top + y);
             drag.destination = Selection {
-                start: (x, y),
-                end: (x + width - 1, y + height - 1),
+                start: shift(drag.source.start),
+                end: shift(drag.source.end),
             };
         }
     }
@@ -751,6 +783,173 @@ impl Editor {
             }
             self.selection = Some(drag.destination);
             self.cursor = (x, y);
+        }
+    }
+
+    fn recolor_selection(
+        &mut self,
+        fg: Option<Color>,
+        bg: Option<Color>,
+        merge: Option<u64>,
+    ) -> bool {
+        let Some(selection) = self.selection.filter(|_| self.selection_drag.is_none()) else {
+            return false;
+        };
+        let (left, top, right, bottom) = selection.bounds();
+        let canvas = &self.doc.canvas;
+        let cells: Vec<_> = (top..=bottom)
+            .flat_map(|y| (left..=right).map(move |x| (x, y)))
+            .filter_map(|(x, y)| {
+                let mut cell = *canvas.get(x, y)?;
+                cell.fg = fg.unwrap_or(cell.fg);
+                cell.bg = bg.unwrap_or(cell.bg);
+                Some((x, y, cell))
+            })
+            .collect();
+        let changed = match merge {
+            Some(revision) => self
+                .history
+                .paint_many_merged(&mut self.doc.canvas, cells, revision),
+            None => self.history.paint_many(&mut self.doc.canvas, cells),
+        };
+        self.dirty |= changed;
+        changed
+    }
+
+    /// Fades the selection's foreground or background from the brush color to
+    /// `pick.end` in the chosen gradient direction (by default, from the cell
+    /// where the selection drag began to where it was released). The output
+    /// palette is the richest of the two colors' palettes.
+    fn apply_gradient(&mut self, pick: GradientPick, merge: Option<u64>) -> Result<bool, String> {
+        let selection = self.selection.ok_or_else(|| {
+            format!(
+                "Select an area first, then {}+click a color to fade it",
+                if cfg!(target_os = "macos") {
+                    "Cmd"
+                } else {
+                    "Ctrl"
+                }
+            )
+        })?;
+        let start = if pick.background {
+            self.brush.bg
+        } else {
+            self.brush.fg
+        };
+        self.paint_gradient(pick, start, selection, merge)
+    }
+
+    /// Changes the gradient direction. If the selection still holds the most
+    /// recent gradient, it is redrawn in place as part of the same undo step.
+    fn set_gradient_direction(
+        &mut self,
+        direction: GradientDirection,
+        reversed: bool,
+    ) -> Result<bool, String> {
+        self.gradient_direction = direction;
+        self.gradient_reversed = reversed;
+        let Some(last) = self.last_gradient.filter(|last| {
+            Some(last.selection) == self.selection && last.revision == self.history.revision()
+        }) else {
+            return Ok(false);
+        };
+        self.paint_gradient(last.pick, last.start, last.selection, Some(last.revision))
+    }
+
+    fn gradient_line(&self, selection: Selection) -> ((usize, usize), (usize, usize)) {
+        let (left, top, right, bottom) = selection.bounds();
+        let (from, to) = match self.gradient_direction {
+            GradientDirection::Drag => (selection.start, selection.end),
+            GradientDirection::LeftToRight => ((left, top), (right, top)),
+            GradientDirection::TopToBottom => ((left, top), (left, bottom)),
+        };
+        if self.gradient_reversed {
+            (to, from)
+        } else {
+            (from, to)
+        }
+    }
+
+    fn paint_gradient(
+        &mut self,
+        pick: GradientPick,
+        start: Color,
+        selection: Selection,
+        merge: Option<u64>,
+    ) -> Result<bool, String> {
+        if self.selection_drag.is_some() {
+            return Err("Finish moving the selection first".into());
+        }
+        let palette = GradientPalette::for_endpoints(start, pick.end);
+        let (from, to) = self.gradient_line(selection);
+        let (left, top, right, _) = selection.bounds();
+        let width = right - left + 1;
+        let cells = self.selection_cells(selection)?;
+        let changes: Vec<_> = cells
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut cell)| {
+                let point = (left + index % width, top + index / width);
+                let color = gradient_at(start, pick.end, from, to, point, palette);
+                if pick.background {
+                    cell.bg = color;
+                } else {
+                    cell.fg = color;
+                }
+                (point.0, point.1, cell)
+            })
+            .collect();
+        let changed = match merge {
+            Some(revision) => {
+                self.history
+                    .paint_many_merged(&mut self.doc.canvas, changes, revision)
+            }
+            None => self.history.paint_many(&mut self.doc.canvas, changes),
+        };
+        self.dirty |= changed;
+        self.last_gradient = Some(LastGradient {
+            pick,
+            start,
+            selection,
+            revision: self.history.revision(),
+        });
+        Ok(changed)
+    }
+
+    fn gradient_direction_controls(&mut self, ui: &mut egui::Ui) {
+        let (mut direction, mut reversed) = (self.gradient_direction, self.gradient_reversed);
+        ui.horizontal(|ui| {
+            ui.small("Gradient");
+            for (option, icons, label) in [
+                (
+                    GradientDirection::Drag,
+                    [ICON_SOUTH_EAST, ICON_NORTH_WEST],
+                    "Gradient follows the selection drag",
+                ),
+                (
+                    GradientDirection::LeftToRight,
+                    [ICON_EAST, ICON_WEST],
+                    "Gradient runs left to right",
+                ),
+                (
+                    GradientDirection::TopToBottom,
+                    [ICON_SOUTH, ICON_NORTH],
+                    "Gradient runs top to bottom",
+                ),
+            ] {
+                let icon = icons[usize::from(reversed)];
+                if icon_button(ui, icon, label, direction == option).clicked() {
+                    direction = option;
+                }
+            }
+            if icon_button(ui, ICON_SYNC_ALT, "Reverse gradient direction", reversed).clicked() {
+                reversed = !reversed;
+            }
+        });
+        if (direction, reversed) != (self.gradient_direction, self.gradient_reversed) {
+            if let Err(error) = self.set_gradient_direction(direction, reversed) {
+                self.message = Some(error);
+            }
         }
     }
 
@@ -937,25 +1136,29 @@ impl Editor {
 }
 
 fn material_fonts(fonts: &mut egui::FontDefinitions) {
-    let name = "material-icons";
-    fonts.font_data.insert(
-        name.into(),
-        egui::FontData::from_static(egui_material_icons::FONT_DATA).into(),
-    );
+    let font = egui_material_icons::font_insert();
+    let name = font.name;
+    fonts.font_data.insert(name.clone(), font.data.into());
     fonts
         .families
-        .insert(egui::FontFamily::Name(name.into()), vec![name.into()]);
+        .insert(egui::FontFamily::Name(name.clone().into()), vec![name]);
 }
 
-fn icon_button(ui: &mut egui::Ui, icon: &str, label: &str, selected: bool) -> egui::Response {
-    let button = egui::Button::new(egui::RichText::new(icon).font(FontId::new(
-        20.0,
-        egui::FontFamily::Name("material-icons".into()),
-    )))
-    .selected(selected);
-    let response = ui.add_sized([28.0, 28.0], button);
+fn icon_button(
+    ui: &mut egui::Ui,
+    icon: MaterialIcon,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
+    let button = egui::Button::new(icon.rich_text().size(20.0)).selected(selected);
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding.x = 4.0;
+            ui.add_sized([28.0, 28.0], button)
+        })
+        .inner;
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, label)
     });
     response.on_hover_text(label)
 }
@@ -979,19 +1182,60 @@ fn cell_colors(cell: Cell, ice: bool) -> (Color, Color) {
     (fg, bg)
 }
 
-fn artwork_colors(doc: &Document) -> Vec<Color> {
-    let ice = doc.sauce.as_ref().is_some_and(|s| s.flags() & 1 != 0);
-    let mut colors = BTreeMap::new();
-    for y in 0..doc.canvas.height() {
-        for x in 0..doc.canvas.width() {
-            let (fg, bg) = cell_colors(*doc.canvas.get(x, y).unwrap(), ice);
-            for color in [fg, bg] {
-                let rgb = display_color(color);
-                colors.entry([rgb.r(), rgb.g(), rgb.b()]).or_insert(color);
-            }
+fn color_key(color: Color) -> [u8; 3] {
+    let rgb = display_color(color);
+    [rgb.r(), rgb.g(), rgb.b()]
+}
+
+impl Editor {
+    /// Adds a color the user picked to the session's Used colors, once.
+    fn remember_color(&mut self, color: Color) {
+        if !self
+            .picked_colors
+            .iter()
+            .any(|&picked| color_key(picked) == color_key(color))
+        {
+            self.picked_colors.push(color);
         }
     }
-    colors.into_values().collect()
+
+    /// Remembers brush colors chosen since the last frame. Colors from an RGB
+    /// picker are remembered once it closes, not at every step of a drag.
+    fn remember_picked_colors(&mut self) {
+        if self.rgb_open {
+            return;
+        }
+        if let Some(end) = self.pending_gradient_end.take() {
+            self.remember_color(end);
+        }
+        let (fg, bg) = (self.brush.fg, self.brush.bg);
+        if fg != self.remembered_brush.0 {
+            self.remember_color(fg);
+        }
+        if bg != self.remembered_brush.1 {
+            self.remember_color(bg);
+        }
+        self.remembered_brush = (fg, bg);
+    }
+
+    fn ice_colors(&self) -> bool {
+        self.doc.sauce.as_ref().is_some_and(|s| s.flags() & 1 != 0)
+    }
+
+    /// Picks up the displayed foreground or background color of a cell.
+    fn pick_color(&mut self, x: usize, y: usize, background: bool) {
+        let Some(&cell) = self.doc.canvas.get(x, y) else {
+            return;
+        };
+        let (fg, bg) = cell_colors(cell, self.ice_colors());
+        let color = if background { bg } else { fg };
+        if background {
+            self.brush.bg = color;
+        } else {
+            self.brush.fg = color;
+        }
+        self.remember_color(color);
+    }
 }
 
 fn paint_cell(painter: &egui::Painter, cell: Cell, rect: Rect, ice: bool, zoom: f32) {
@@ -1015,34 +1259,87 @@ fn paint_cell(painter: &egui::Painter, cell: Cell, rect: Rect, ice: bool, zoom: 
     }
 }
 
+/// A modifier-click request to fade the selection's foreground or background
+/// from the current brush color to `end`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GradientPick {
+    background: bool,
+    end: Color,
+}
+
+/// What the RGB picker edits: `(background, gradient end)`.
+type RgbTarget = (bool, bool);
+
+#[derive(Default)]
+struct ColorEvents {
+    gradient: Option<GradientPick>,
+    /// The open RGB picker's target, or `None` when it is closed.
+    rgb: Option<RgbTarget>,
+    /// A color clicked in a palette for the brush, even if it was already
+    /// the current color.
+    picked: Option<Color>,
+}
+
+fn gradient_modifier(ctx: &egui::Context) -> &'static str {
+    if ctx.os() == egui::os::OperatingSystem::Mac {
+        "Cmd"
+    } else {
+        "Ctrl"
+    }
+}
+
 fn palette_button(
     ui: &mut egui::Ui,
     label: &str,
     color: Color,
     foreground: &mut Color,
     background: &mut Color,
+    gradient: &mut Option<GradientPick>,
+    picked: &mut Option<Color>,
 ) -> egui::Response {
     let selected = display_color(*foreground) == display_color(color)
         || display_color(*background) == display_color(color);
     let button = egui::Button::new("")
         .fill(display_color(color))
-        .stroke(if selected {
-            egui::Stroke::new(2.0_f32, Color32::WHITE)
-        } else {
-            ui.visuals().widgets.inactive.bg_stroke
-        });
+        .stroke(ui.visuals().widgets.inactive.bg_stroke);
     let response = ui.add_sized([24.0, 20.0], button);
+    if selected {
+        ui.painter().rect_stroke(
+            response.rect,
+            ui.visuals().widgets.inactive.corner_radius,
+            egui::Stroke::new(2.0, Color32::WHITE),
+            egui::StrokeKind::Inside,
+        );
+    }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, label)
     });
-    if response.clicked() {
-        *foreground = color;
+    let modified = ui.input(|input| input.modifiers.command);
+    for (clicked, is_background) in [
+        (response.clicked(), false),
+        (response.secondary_clicked(), true),
+    ] {
+        if !clicked {
+            continue;
+        }
+        if modified {
+            *gradient = Some(GradientPick {
+                background: is_background,
+                end: color,
+            });
+        } else {
+            *picked = Some(color);
+            if is_background {
+                *background = color;
+            } else {
+                *foreground = color;
+            }
+        }
     }
-    if response.secondary_clicked() {
-        *background = color;
-    }
+    let modifier = gradient_modifier(ui.ctx());
     response.on_hover_text(format!(
-        "{label}. Left-click: foreground; right-click: background."
+        "{label}. Left-click: foreground; right-click: background. \
+         {modifier}+click: fade the selection from the current color to this one."
     ))
 }
 
@@ -1051,14 +1348,25 @@ fn used_palette(
     colors: &[Color],
     foreground: &mut Color,
     background: &mut Color,
+    gradient: &mut Option<GradientPick>,
+    picked: &mut Option<Color>,
 ) {
     ui.push_id("artwork_palette", |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
-        ui.small("Used colors")
-            .on_hover_text("Colors currently used in the artwork. Left-click for foreground; right-click for background.");
+        ui.small("Used colors").on_hover_text(
+            "Colors you have picked this session. Left-click for foreground; right-click for background.",
+        );
+        if colors.is_empty() {
+            ui.weak("Colors you pick appear here.");
+        }
         egui::ScrollArea::vertical()
             .id_salt("used_colors")
             .max_height(68.0)
+            // Keep the last pixel-snapped row inside the scroll viewport.
+            .content_margin(egui::Margin {
+                bottom: 1,
+                ..Default::default()
+            })
             .show_rows(ui, 20.0, colors.len().div_ceil(8), |ui, rows| {
                 egui::Grid::new("used_palette")
                     .spacing(Vec2::new(4.0, 2.0))
@@ -1074,6 +1382,8 @@ fn used_palette(
                                         used,
                                         foreground,
                                         background,
+                                        gradient,
+                                        picked,
                                     )
                                 });
                             }
@@ -1091,7 +1401,7 @@ fn current_color_swatch(ui: &mut egui::Ui, label: &str, color: Color) -> egui::R
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::ColorButton,
+            egui::Role::ColorWell,
             ui.is_enabled(),
             false,
             format!("{label} current color"),
@@ -1107,131 +1417,205 @@ fn color_controls(
     foreground: &mut Color,
     background: &mut Color,
     used_colors: &[Color],
-) {
-    ui.small("Left: foreground / Right: background");
-    ui.push_id("colors", |ui| {
-        egui::Grid::new("palette")
-            .spacing(Vec2::splat(4.0))
-            .min_col_width(24.0)
-            .show(ui, |ui| {
-                for n in 0..16 {
-                    palette_button(
-                        ui,
-                        &format!("ANSI color {n}"),
-                        Color::Ansi(n),
-                        foreground,
-                        background,
-                    );
-                    if n % 8 == 7 {
-                        ui.end_row();
+) -> ColorEvents {
+    let mut gradient = None;
+    let mut picked = None;
+    let modifier = gradient_modifier(ui.ctx());
+    let hint = format!(
+        "Left-click a color for foreground, right-click for background. \
+         With a selection, {modifier}+left/right-click fades its foreground/background \
+         from the current color to the clicked one."
+    );
+    ui.small("Left: FG / Right: BG").on_hover_text(&hint);
+    ui.small(format!("{modifier}+click: selection gradient"))
+        .on_hover_text(hint);
+    let rgb = ui
+        .push_id("colors", |ui| {
+            egui::Grid::new("palette")
+                .spacing(Vec2::splat(4.0))
+                .min_col_width(24.0)
+                .show(ui, |ui| {
+                    for n in 0..16 {
+                        palette_button(
+                            ui,
+                            &format!("ANSI color {n}"),
+                            Color::Ansi(n),
+                            foreground,
+                            background,
+                            &mut gradient,
+                            &mut picked,
+                        );
+                        if n % 8 == 7 {
+                            ui.end_row();
+                        }
                     }
+                });
+            used_palette(
+                ui,
+                used_colors,
+                foreground,
+                background,
+                &mut gradient,
+                &mut picked,
+            );
+            ui.horizontal(|ui| {
+                let indexed_id = ui.make_persistent_id("indexed_palette");
+                let rgb_id = ui.make_persistent_id("rgb_palette");
+                let rgb_target_id = ui.make_persistent_id("rgb_target");
+                let rgb_end_id = ui.make_persistent_id("rgb_gradient_end");
+                let indexed = icon_button(
+                    ui,
+                    ICON_GRID_VIEW,
+                    "256-color palette",
+                    matches!(foreground, Color::Indexed(_))
+                        || matches!(background, Color::Indexed(_)),
+                );
+                if indexed.clicked() || indexed.secondary_clicked() {
+                    egui::Popup::toggle_id(ui.ctx(), indexed_id);
                 }
-            });
-        used_palette(ui, used_colors, foreground, background);
-        ui.horizontal(|ui| {
-            let indexed_id = ui.make_persistent_id("indexed_palette");
-            let rgb_id = ui.make_persistent_id("rgb_palette");
-            let rgb_target_id = ui.make_persistent_id("rgb_background");
-            let indexed = icon_button(
-                ui,
-                ICON_GRID_VIEW,
-                "256-color palette",
-                matches!(foreground, Color::Indexed(_)) || matches!(background, Color::Indexed(_)),
-            );
-            if indexed.clicked() || indexed.secondary_clicked() {
-                ui.memory_mut(|memory| memory.toggle_popup(indexed_id));
-            }
-            egui::popup::popup_below_widget(
-                ui,
-                indexed_id,
-                &indexed,
-                egui::popup::PopupCloseBehavior::CloseOnClickOutside,
-                |ui| {
-                    ui.label("256-color palette");
-                    ui.small("Left: foreground / Right: background");
-                    egui::Grid::new("indexed_colors")
-                        .spacing(Vec2::splat(2.0))
-                        .min_col_width(24.0)
-                        .show(ui, |ui| {
-                            for n in 0..=255 {
-                                let response = palette_button(
-                                    ui,
-                                    &format!("Indexed color {n}"),
-                                    Color::Indexed(n),
-                                    foreground,
-                                    background,
-                                );
-                                if response.clicked() || response.secondary_clicked() {
-                                    ui.memory_mut(|memory| memory.close_popup());
+                egui::Popup::from_response(&indexed)
+                    .id(indexed_id)
+                    .open_memory(None)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        ui.label("256-color palette");
+                        ui.small("Left: foreground / Right: background");
+                        egui::Grid::new("indexed_colors")
+                            .spacing(Vec2::splat(2.0))
+                            .min_col_width(24.0)
+                            .show(ui, |ui| {
+                                for n in 0..=255 {
+                                    let response = palette_button(
+                                        ui,
+                                        &format!("Indexed color {n}"),
+                                        Color::Indexed(n),
+                                        foreground,
+                                        background,
+                                        &mut gradient,
+                                        &mut picked,
+                                    );
+                                    if response.clicked() || response.secondary_clicked() {
+                                        egui::Popup::close_id(ui.ctx(), indexed_id);
+                                    }
+                                    if n % 16 == 15 {
+                                        ui.end_row();
+                                    }
                                 }
-                                if n % 16 == 15 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
-                },
-            );
-            let rgb = icon_button(
-                ui,
-                ICON_PALETTE,
-                "RGB color: left-click foreground, right-click background",
-                matches!(foreground, Color::Rgb(..)) || matches!(background, Color::Rgb(..)),
-            );
-            ui.small("FG");
-            let current_fg = current_color_swatch(ui, "Foreground", *foreground);
-            ui.small("BG");
-            let current_bg = current_color_swatch(ui, "Background", *background);
-            let target = if rgb.secondary_clicked()
-                || current_fg.secondary_clicked()
-                || current_bg.secondary_clicked()
-            {
-                Some(true)
-            } else if rgb.clicked() || current_fg.clicked() || current_bg.clicked() {
-                Some(false)
-            } else {
-                None
-            };
-            if let Some(background) = target {
-                ui.data_mut(|data| data.insert_temp(rgb_target_id, background));
-                ui.memory_mut(|memory| memory.open_popup(rgb_id));
-            }
-            egui::popup::popup_below_widget(
-                ui,
-                rgb_id,
-                &rgb,
-                egui::popup::PopupCloseBehavior::CloseOnClickOutside,
-                |ui| {
-                    ui.spacing_mut().slider_width = 275.0;
-                    let editing_background =
-                        ui.data(|data| data.get_temp::<bool>(rgb_target_id).unwrap_or(false));
-                    let color = if editing_background {
-                        ui.label("Background RGB color");
-                        &mut *background
+                            });
+                    });
+                let rgb = icon_button(
+                    ui,
+                    ICON_PALETTE,
+                    &format!(
+                        "RGB color: left-click foreground, right-click background; \
+                     {modifier}+click picks a gradient end color"
+                    ),
+                    matches!(foreground, Color::Rgb(..)) || matches!(background, Color::Rgb(..)),
+                );
+                ui.small("FG");
+                let current_fg = current_color_swatch(ui, "Foreground", *foreground);
+                ui.small("BG");
+                let current_bg = current_color_swatch(ui, "Background", *background);
+                let opened_background = if rgb.secondary_clicked()
+                    || current_fg.secondary_clicked()
+                    || current_bg.secondary_clicked()
+                {
+                    Some(true)
+                } else if rgb.clicked() || current_fg.clicked() || current_bg.clicked() {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(is_background) = opened_background {
+                    let target: RgbTarget = (is_background, ui.input(|i| i.modifiers.command));
+                    let start = if is_background {
+                        *background
                     } else {
-                        ui.label("Foreground RGB color");
-                        &mut *foreground
+                        *foreground
                     };
-                    let mut selected = display_color(*color);
-                    if egui::color_picker::color_picker_color32(
-                        ui,
-                        &mut selected,
-                        egui::color_picker::Alpha::Opaque,
-                    ) {
-                        *color = Color::Rgb(selected.r(), selected.g(), selected.b());
-                    }
-                },
-            );
-        });
-    });
+                    ui.data_mut(|data| {
+                        data.insert_temp(rgb_target_id, target);
+                        data.insert_temp(rgb_end_id, start);
+                    });
+                    egui::Popup::open_id(ui.ctx(), rgb_id);
+                }
+                let target: RgbTarget =
+                    ui.data(|data| data.get_temp(rgb_target_id).unwrap_or_default());
+                egui::Popup::from_response(&rgb)
+                    .id(rgb_id)
+                    .open_memory(None)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        ui.spacing_mut().slider_width = 275.0;
+                        let (is_background, is_gradient) = target;
+                        let name = if is_background {
+                            "Background"
+                        } else {
+                            "Foreground"
+                        };
+                        let mut end: Color = ui
+                            .data(|data| data.get_temp(rgb_end_id).unwrap_or(Color::Rgb(0, 0, 0)));
+                        let color = if is_gradient {
+                            ui.label(format!("{name} gradient end RGB color"));
+                            &mut end
+                        } else {
+                            ui.label(format!("{name} RGB color"));
+                            if is_background {
+                                &mut *background
+                            } else {
+                                &mut *foreground
+                            }
+                        };
+                        let mut selected = display_color(*color);
+                        if egui::color_picker::color_picker_color32(
+                            ui,
+                            &mut selected,
+                            egui::color_picker::Alpha::Opaque,
+                        ) {
+                            let picked = Color::Rgb(selected.r(), selected.g(), selected.b());
+                            if !is_gradient && ui.input(|input| input.modifiers.command) {
+                                // A modified pick inside an open picker switches it to
+                                // choosing the gradient end, leaving the brush unchanged.
+                                ui.data_mut(|data| {
+                                    data.insert_temp(rgb_target_id, (is_background, true));
+                                    data.insert_temp(rgb_end_id, picked);
+                                });
+                                gradient = Some(GradientPick {
+                                    background: is_background,
+                                    end: picked,
+                                });
+                                return;
+                            }
+                            *color = picked;
+                            if is_gradient {
+                                ui.data_mut(|data| data.insert_temp(rgb_end_id, end));
+                                gradient = Some(GradientPick {
+                                    background: is_background,
+                                    end,
+                                });
+                            }
+                        }
+                    });
+                egui::Popup::is_id_open(ui.ctx(), rgb_id)
+                    .then(|| ui.data(|data| data.get_temp(rgb_target_id).unwrap_or(target)))
+            })
+            .inner
+        })
+        .inner;
+    ColorEvents {
+        gradient,
+        rgb,
+        picked,
+    }
 }
 
 impl eframe::App for Editor {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         for path in macos_open::take() {
-            self.request(PendingAction::OpenPath(path), ctx);
+            self.request(PendingAction::OpenPath(path), ui.ctx());
         }
-        self.ui(ctx);
+        self.ui(ui);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1251,6 +1635,7 @@ impl eframe::App for Editor {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
+        storage.set_string(MINIMAP_VISIBLE_KEY, self.minimap_visible.to_string());
     }
 
     fn persist_egui_memory(&self) -> bool {
@@ -1269,13 +1654,24 @@ impl Editor {
         match section {
             SidebarSection::Brush => {
                 ui.horizontal(|ui| {
-                    if icon_button(ui, ICON_BRUSH, "Draw", !self.selecting).clicked() {
-                        self.selecting = false;
+                    let tool = (self.selecting, self.eyedropper);
+                    if icon_button(ui, ICON_BRUSH, "Draw", tool == (false, false)).clicked() {
+                        (self.selecting, self.eyedropper) = (false, false);
                     }
-                    if icon_button(ui, ICON_SELECT_ALL, "Select a rectangle", self.selecting)
+                    if icon_button(ui, ICON_SELECT_ALL, "Select a rectangle", tool == (true, false))
                         .clicked()
                     {
-                        self.selecting = true;
+                        (self.selecting, self.eyedropper) = (true, false);
+                    }
+                    if icon_button(
+                        ui,
+                        ICON_COLORIZE,
+                        "Eyedropper: left-click picks up a foreground color, right-click a background color",
+                        self.eyedropper,
+                    )
+                    .clicked()
+                    {
+                        self.eyedropper = true;
                     }
                     ui.separator();
                     if icon_button(
@@ -1329,7 +1725,44 @@ impl Editor {
             }
             SidebarSection::Zoom => self.zoom_controls(ui),
             SidebarSection::Colors => {
-                color_controls(ui, &mut self.brush.fg, &mut self.brush.bg, used_colors)
+                let before = (self.brush.fg, self.brush.bg);
+                let events =
+                    color_controls(ui, &mut self.brush.fg, &mut self.brush.bg, used_colors);
+                self.rgb_open = events.rgb.is_some();
+                if let Some(color) = events.picked {
+                    self.remember_color(color);
+                }
+                let fg = (self.brush.fg != before.0).then_some(self.brush.fg);
+                let bg = (self.brush.bg != before.1).then_some(self.brush.bg);
+                if events.rgb.is_none() {
+                    self.recolor_merge = None;
+                }
+                let merge = self
+                    .recolor_merge
+                    .filter(|&(target, _)| Some(target) == events.rgb)
+                    .map(|(_, revision)| revision);
+                let changed = if let Some(pick) = events.gradient {
+                    match self.apply_gradient(pick, merge) {
+                        Ok(changed) => {
+                            self.pending_gradient_end = Some(pick.end);
+                            changed
+                        }
+                        Err(error) => {
+                            self.message = Some(error);
+                            false
+                        }
+                    }
+                } else if fg.is_some() || bg.is_some() {
+                    self.recolor_selection(fg, bg, merge)
+                } else {
+                    false
+                };
+                if changed {
+                    self.recolor_merge = events.rgb.map(|target| (target, self.history.revision()));
+                }
+                if self.selection.is_some() {
+                    self.gradient_direction_controls(ui);
+                }
             }
             SidebarSection::Attributes => {
                 ui.horizontal(|ui| {
@@ -1389,7 +1822,13 @@ impl Editor {
                         });
                     ui.label("Comments (one per line)");
                     let mut comments = sauce.comments.join("\n");
-                    if ui.text_edit_multiline(&mut comments).changed() {
+                    if ui
+                        .add(
+                            egui::TextEdit::multiline(&mut comments)
+                                .desired_width(ui.available_width()),
+                        )
+                        .changed()
+                    {
                         self.dirty = true;
                         sauce.comments = if comments.is_empty() {
                             vec![]
@@ -1407,7 +1846,9 @@ impl Editor {
         }
     }
 
-    fn ui(&mut self, ctx: &egui::Context) {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        let context = ui.ctx().clone();
+        let ctx = &context;
         if !self.about_open && self.selection_drag.is_none() {
             if ctx.input_mut(|input| {
                 input.consume_key(egui::Modifiers::COMMAND, egui::Key::Plus)
@@ -1451,8 +1892,8 @@ impl Editor {
         }
         let mut clipboard_action = None;
         let mut focus_canvas = false;
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("toolbar").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
                         .button("New image")
@@ -1461,7 +1902,7 @@ impl Editor {
                         ))
                         .clicked()
                     {
-                        ui.close_menu();
+                        ui.close();
                         self.request(PendingAction::New, ctx);
                     }
                     if ui
@@ -1469,16 +1910,16 @@ impl Editor {
                         .on_hover_text("Use SAUCE dimensions, or 80 columns and the artwork's inferred height")
                         .clicked()
                     {
-                        ui.close_menu();
+                        ui.close();
                         self.request(PendingAction::Open, ctx);
                     }
                     ui.separator();
                     if ui.button("Save").clicked() {
-                        ui.close_menu();
+                        ui.close();
                         self.save(false);
                     }
                     if ui.button("Save as...").clicked() {
-                        ui.close_menu();
+                        ui.close();
                         self.save(true);
                     }
                     if ui
@@ -1491,7 +1932,7 @@ impl Editor {
                         )
                         .clicked()
                     {
-                        ui.close_menu();
+                        ui.close();
                         self.save_selection();
                     }
                     for (label, format) in [
@@ -1502,7 +1943,7 @@ impl Editor {
                             .on_hover_text("Render the selection, or the full artwork when nothing is selected")
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close();
                             self.export_image(ctx, format);
                         }
                     }
@@ -1515,13 +1956,13 @@ impl Editor {
                                 .selectable_value(&mut self.encoding, encoding, label)
                                 .clicked()
                             {
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     });
                     ui.separator();
                     if ui.button("Exit").clicked() {
-                        ui.close_menu();
+                        ui.close();
                         self.request(PendingAction::Close, ctx);
                     }
                 });
@@ -1530,14 +1971,14 @@ impl Editor {
                         .add(egui::Button::new("Undo").shortcut_text(shortcut_text(ctx, egui::Key::Z)))
                         .clicked()
                     {
-                        ui.close_menu();
+                        ui.close();
                         self.undo();
                     }
                     if ui
                         .add(egui::Button::new("Redo").shortcut_text(ctx.format_shortcut(&REDO_SHORTCUT)))
                         .clicked()
                     {
-                        ui.close_menu();
+                        ui.close();
                         self.redo();
                     }
                     ui.separator();
@@ -1551,7 +1992,7 @@ impl Editor {
                             )
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close();
                             clipboard_action = Some(cut);
                         }
                     }
@@ -1559,39 +2000,49 @@ impl Editor {
                         .add(egui::Button::new("Paste").shortcut_text(shortcut_text(ctx, egui::Key::V)))
                         .clicked()
                     {
-                        ui.close_menu();
+                        ui.close();
                         focus_canvas = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                     }
                     ui.separator();
                     if ui
-                        .selectable_value(&mut self.selecting, false, "Draw mode")
+                        .selectable_label(!self.selecting && !self.eyedropper, "Draw mode")
                         .clicked()
                     {
-                        ui.close_menu();
+                        (self.selecting, self.eyedropper) = (false, false);
+                        ui.close();
+                        focus_canvas = true;
+                    }
+                    if ui.selectable_label(self.eyedropper, "Eyedropper").clicked() {
+                        self.eyedropper = true;
+                        ui.close();
                         focus_canvas = true;
                     }
                     if ui.button("CP437 character picker...").clicked() {
-                        ui.close_menu();
+                        ui.close();
                         self.picker_open = true;
                     }
                     if ui.button("TheDraw fonts...").clicked() {
-                        ui.close_menu();
+                        ui.close();
                         self.tdf_open = true;
                     }
                 });
                 ui.menu_button("Selection", |ui| {
                     if ui
-                        .selectable_value(&mut self.selecting, true, "Rectangular selection")
+                        .selectable_label(
+                            self.selecting && !self.eyedropper,
+                            "Rectangular selection",
+                        )
                         .clicked()
                     {
-                        ui.close_menu();
+                        (self.selecting, self.eyedropper) = (true, false);
+                        ui.close();
                         focus_canvas = true;
                     }
                     ui.separator();
                     if ui.button("Select all").clicked() {
-                        ui.close_menu();
-                        self.selecting = true;
+                        ui.close();
+                        (self.selecting, self.eyedropper) = (true, false);
                         self.selection = Some(Selection {
                             start: (0, 0),
                             end: (self.doc.canvas.width() - 1, self.doc.canvas.height() - 1),
@@ -1603,7 +2054,7 @@ impl Editor {
                         .add_enabled(self.selection.is_some(), egui::Button::new("Deselect"))
                         .clicked()
                     {
-                        ui.close_menu();
+                        ui.close();
                         self.selection = None;
                         focus_canvas = true;
                     }
@@ -1618,7 +2069,7 @@ impl Editor {
                         .clicked()
                     {
                         self.change_zoom(1);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(
@@ -1628,7 +2079,7 @@ impl Editor {
                         .clicked()
                     {
                         self.change_zoom(-1);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(
@@ -1638,7 +2089,11 @@ impl Editor {
                         .clicked()
                     {
                         self.zoom_percent = DEFAULT_ZOOM_PERCENT;
-                        ui.close_menu();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.checkbox(&mut self.minimap_visible, "Show minimap").changed() {
+                        ui.close();
                     }
                 });
                 ui.menu_button("Canvas", |ui| {
@@ -1653,7 +2108,7 @@ impl Editor {
                     });
                     ui.separator();
                     if ui.button("Resize canvas").clicked() {
-                        ui.close_menu();
+                        ui.close();
                         match self
                             .history
                             .resize(&mut self.doc.canvas, self.width, self.height)
@@ -1673,11 +2128,12 @@ impl Editor {
                 }
             });
         });
-        let used_colors = artwork_colors(&self.doc);
-        egui::SidePanel::left("tools")
+        self.rgb_open = false;
+        let used_colors = self.picked_colors.clone();
+        egui::Panel::left("tools")
             .resizable(true)
-            .default_width(260.0)
-            .show(ctx, |ui| {
+            .default_size(260.0)
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
                     let (press, release) = ctx.input(|input| {
@@ -1748,7 +2204,7 @@ impl Editor {
                                             );
                                             toggle.widget_info(|| {
                                                 egui::WidgetInfo::selected(
-                                                    egui::WidgetType::Button,
+                                                    egui::Role::Button,
                                                     ui.is_enabled(),
                                                     !collapsed,
                                                     &label,
@@ -1760,7 +2216,7 @@ impl Editor {
                                                         .retain(|&item| item != section);
                                                 } else {
                                                     self.sidebar_collapsed.push(section);
-                                                    ui.memory_mut(|memory| memory.close_popup());
+                                                    egui::Popup::close_all(ui.ctx());
                                                 }
                                                 ctx.request_repaint();
                                             }
@@ -1786,7 +2242,7 @@ impl Editor {
                                                         format!("Drag {} section", section.label());
                                                     handle.widget_info(|| {
                                                         egui::WidgetInfo::selected(
-                                                            egui::WidgetType::Button,
+                                                            egui::Role::Button,
                                                             ui.is_enabled(),
                                                             false,
                                                             &label,
@@ -1883,18 +2339,50 @@ impl Editor {
                     }
                 });
             });
+        let minimap = if self.minimap_visible {
+            egui::Panel::right("minimap")
+                .resizable(true)
+                .default_size(MINIMAP_DEFAULT_WIDTH)
+                .size_range(112.0..=minimap::MAX_PANEL_WIDTH)
+                .show(ui, |ui| {
+                    ui.strong("Minimap");
+                    minimap::Minimap::layout(ui, &self.doc.canvas)
+                })
+                .inner
+        } else {
+            self.minimap.hide();
+            None
+        };
+        let navigation = minimap
+            .as_ref()
+            .and_then(|widget| self.minimap.navigate(widget));
+        if let Some(navigation) = &navigation {
+            if navigation.reset {
+                egui::scroll_area::State::default().store(ctx, navigation.scroll_id);
+            }
+        }
         let mut canvas_id = None;
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
-            let zoom = self.zoom_percent / DEFAULT_ZOOM_PERCENT;
-            let max_height = if self.zoom_percent == DEFAULT_ZOOM_PERCENT {
-                50.0 * glyph::CELL_SIZE.y
-            } else {
-                f32::INFINITY
-            };
-            egui::ScrollArea::both()
-                .max_height(max_height)
-                .show_viewport(ui, |ui, viewport| {
+        let canvas_scroll = egui::CentralPanel::default()
+            .show(ui, |ui| {
+                ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+                ui.style_mut().spacing.scroll.fade.strength = 0.0;
+                let zoom = self.zoom_percent / DEFAULT_ZOOM_PERCENT;
+                let max_height = if self.zoom_percent == DEFAULT_ZOOM_PERCENT {
+                    50.0 * glyph::CELL_SIZE.y
+                } else {
+                    f32::INFINITY
+                };
+                let mut scroll = egui::ScrollArea::both().max_height(max_height);
+                if let Some(navigation) = &navigation {
+                    scroll = scroll.scroll_offset(navigation.offset);
+                    if navigation.reset {
+                        // Keep the existing scrollbar layout while clearing scroll momentum and targets.
+                        scroll = scroll.scroll(navigation.scrollable).scroll_bar_visibility(
+                            egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                        );
+                    }
+                }
+                scroll.show_viewport(ui, |ui, viewport| {
                     let size = glyph::CELL_SIZE * zoom;
                     let (response, painter) = ui.allocate_painter(
                         Vec2::new(
@@ -1914,6 +2402,18 @@ impl Editor {
                             (relative.y.max(0.0) / size.y) as usize,
                         )
                     };
+                    let eyedropper = self.eyedropper && !self.tdf_open;
+                    if eyedropper {
+                        if response.hovered() {
+                            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                        }
+                        if response.secondary_clicked() {
+                            if let Some((x, y)) = response.interact_pointer_pos().map(point) {
+                                self.pick_color(x, y, true);
+                                response.request_focus();
+                            }
+                        }
+                    }
                     let bounded_point = |p: Pos2| {
                         let (x, y) = point(p);
                         (
@@ -1921,7 +2421,10 @@ impl Editor {
                             y.min(self.doc.canvas.height() - 1),
                         )
                     };
-                    if !self.tdf_open && response.drag_started_by(egui::PointerButton::Primary) {
+                    if !self.tdf_open
+                        && !eyedropper
+                        && response.drag_started_by(egui::PointerButton::Primary)
+                    {
                         if let Some(anchor) = ctx
                             .input(|input| input.pointer.press_origin())
                             .map(bounded_point)
@@ -1961,6 +2464,9 @@ impl Editor {
                                     x.min(self.doc.canvas.width() - 1),
                                     y.min(self.doc.canvas.height() - 1),
                                 );
+                                response.request_focus();
+                            } else if eyedropper {
+                                self.pick_color(x, y, false);
                                 response.request_focus();
                             } else if response.clicked()
                                 && self
@@ -2004,7 +2510,8 @@ impl Editor {
                                     self.history.paint(&mut self.doc.canvas, x, y, self.brush);
                             }
                         }
-                        if !self.tdf_open && response.hovered() && !moving_selection {
+                        if !self.tdf_open && !eyedropper && response.hovered() && !moving_selection
+                        {
                             if let Some((x, y)) = response.hover_pos().map(point) {
                                 if self
                                     .selection
@@ -2118,8 +2625,24 @@ impl Editor {
                             egui::StrokeKind::Inside,
                         );
                     }
-                });
-        });
+                })
+            })
+            .inner;
+        if let Some(widget) = minimap {
+            let zoom = self.zoom_percent / DEFAULT_ZOOM_PERCENT;
+            let canvas_size = Vec2::new(
+                self.doc.canvas.width() as f32 * glyph::CELL_SIZE.x * zoom,
+                self.doc.canvas.height() as f32 * glyph::CELL_SIZE.y * zoom,
+            );
+            self.minimap.paint(
+                widget,
+                &self.doc,
+                self.history.revision(),
+                self.selection_drag.as_ref(),
+                canvas_size,
+                &canvas_scroll,
+            );
+        }
         if self.tdf_open {
             self.tdf_window(ctx);
         }
@@ -2155,7 +2678,7 @@ impl Editor {
                                         );
                                         response.widget_info(|| {
                                             egui::WidgetInfo::selected(
-                                                egui::WidgetType::Button,
+                                                egui::Role::Button,
                                                 ui.is_enabled(),
                                                 self.brush.ch == ch,
                                                 ch.to_string(),
@@ -2220,6 +2743,7 @@ impl Editor {
                 });
         }
         self.about_window(ctx);
+        self.remember_picked_colors();
         // Canvas edits follow the sidebar, so refresh its used swatches on the next frame.
         if ctx.input(|input| !input.events.is_empty()) {
             ctx.request_repaint();
@@ -2364,7 +2888,12 @@ impl Editor {
                             ui.add(egui::DragValue::new(&mut self.tdf_spacing).range(0..=40));
                         });
                         ui.label("Text (ASCII; Enter for another line)");
-                        ui.add(egui::TextEdit::multiline(&mut self.tdf_text).desired_rows(2));
+                        egui::ScrollArea::vertical()
+                            .id_salt("tdf_text_input")
+                            .max_height(68.0)
+                            .show(ui, |ui| {
+                                ui.add(egui::TextEdit::multiline(&mut self.tdf_text).desired_rows(2));
+                            });
                         ui.label("Click the canvas to choose a destination without painting.");
                         ui.label("Preview");
                         let result = font.render(&self.tdf_text, self.brush, self.tdf_spacing);
@@ -2483,6 +3012,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "ADraw",
         eframe::NativeOptions {
+            renderer: eframe::Renderer::Wgpu,
             persist_window: false,
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size(DEFAULT_WINDOW_SIZE)
@@ -2505,16 +3035,30 @@ fn main() -> eframe::Result {
 }
 
 #[cfg(test)]
+fn run_test_frame(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    run: impl FnMut(&egui::Context),
+) -> egui::FullOutput {
+    let mut output = ctx.run_pass(input, run);
+    output.textures_delta.clear();
+    output
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use eframe::Storage;
+    use std::collections::BTreeMap;
 
     #[test]
     fn window_icon_matches_the_supplied_executable_icon_and_decodes() {
         let ico = include_bytes!("../assets/adraw.ico");
         let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
         let entry = ico[6..]
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .take(count)
             .find(|entry| entry[0] == 0 && entry[1] == 0)
             .expect("ICO must include a 256x256 image");
@@ -2524,7 +3068,12 @@ mod tests {
         let icon = eframe::icon_data::from_png_bytes(APP_ICON_PNG).unwrap();
         assert_eq!((icon.width, icon.height), (256, 256));
         assert_eq!(icon.rgba.len(), 256 * 256 * 4);
-        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        assert!(icon
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] != 0));
     }
 
     fn context() -> egui::Context {
@@ -2546,6 +3095,10 @@ mod tests {
 
         fn set_string(&mut self, key: &str, value: String) {
             self.0.insert(key.to_owned(), value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
         }
 
         fn flush(&mut self) {}
@@ -2620,7 +3173,11 @@ mod tests {
         sidebar_icon(output, section, ICON_DRAG_HANDLE)
     }
 
-    fn sidebar_icon(output: &egui::FullOutput, section: SidebarSection, icon: &str) -> Pos2 {
+    fn sidebar_icon(
+        output: &egui::FullOutput,
+        section: SidebarSection,
+        icon: MaterialIcon,
+    ) -> Pos2 {
         let header = output
             .shapes
             .iter()
@@ -2635,7 +3192,7 @@ mod tests {
             .shapes
             .iter()
             .filter_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(shape) if shape.galley.text() == icon => {
+                egui::Shape::Text(shape) if shape.galley.text() == icon.codepoint => {
                     Some(shape.galley.rect.translate(shape.pos.to_vec2()).center())
                 }
                 _ => None,
@@ -2654,10 +3211,10 @@ mod tests {
             let brush = editor.brush;
             let order = editor.sidebar_order.clone();
             let marker = match section {
-                SidebarSection::Brush => ICON_BRUSH,
-                SidebarSection::Zoom => ICON_ZOOM_IN,
-                SidebarSection::Colors => ICON_PALETTE,
-                SidebarSection::Attributes => ICON_FORMAT_BOLD,
+                SidebarSection::Brush => ICON_BRUSH.codepoint,
+                SidebarSection::Zoom => ICON_ZOOM_IN.codepoint,
+                SidebarSection::Colors => ICON_PALETTE.codepoint,
+                SidebarSection::Attributes => ICON_FORMAT_BOLD.codepoint,
                 SidebarSection::Sauce => "Example title",
             };
             let has_body = |output: &egui::FullOutput| {
@@ -2703,7 +3260,7 @@ mod tests {
                 .iter()
                 .find_map(|clipped| match &clipped.shape {
                     egui::Shape::Rect(shape)
-                        if shape.fill == ctx.style().visuals.widgets.inactive.bg_fill
+                        if shape.fill == ctx.global_style().visuals.widgets.inactive.bg_fill
                             && shape.rect.contains_rect(heading) =>
                     {
                         Some(shape.rect)
@@ -2720,7 +3277,7 @@ mod tests {
                     matches!(&clipped.shape, egui::Shape::Rect(shape)
                     if (250.0..=270.0).contains(&shape.rect.width()) && shape.rect.height() > 300.0
                         && shape.rect.contains_rect(header)
-                        && shape.fill != ctx.style().visuals.widgets.inactive.bg_fill)
+                        && shape.fill != ctx.global_style().visuals.widgets.inactive.bg_fill)
                 }),
                 "header and body backgrounds are distinct"
             );
@@ -2778,31 +3335,38 @@ mod tests {
     fn every_sidebar_section_moves_on_release_without_editing_artwork() {
         for section in SidebarSection::ALL {
             let ctx = context();
+            let size = Vec2::new(800.0, DEFAULT_WINDOW_SIZE.y);
             let mut editor = Editor::default();
             let original = editor.doc.canvas.clone();
             let order = editor.sidebar_order.clone();
-            frame(&ctx, &mut editor, vec![]);
-            let output = frame(&ctx, &mut editor, vec![]);
+            frame_sized(&ctx, &mut editor, vec![], size);
+            let output = frame_sized(&ctx, &mut editor, vec![], size);
             let start = sidebar_handle(&output, section);
             let target = if section == SidebarSection::Brush {
                 sidebar_handle(&output, SidebarSection::Attributes) + Vec2::new(-100.0, 38.0)
             } else {
                 sidebar_handle(&output, SidebarSection::Brush)
             };
-            frame(
+            frame_sized(
                 &ctx,
                 &mut editor,
                 vec![
                     egui::Event::PointerMoved(start),
                     pointer_button(start, true),
                 ],
+                size,
             );
-            frame(&ctx, &mut editor, vec![egui::Event::PointerMoved(target)]);
+            frame_sized(
+                &ctx,
+                &mut editor,
+                vec![egui::Event::PointerMoved(target)],
+                size,
+            );
             assert_eq!(
                 editor.sidebar_order, order,
                 "hovering previews rather than committing"
             );
-            frame(&ctx, &mut editor, vec![pointer_button(target, false)]);
+            frame_sized(&ctx, &mut editor, vec![pointer_button(target, false)], size);
             let mut expected = order;
             expected.retain(|&item| item != section);
             expected.insert(
@@ -2814,7 +3378,7 @@ mod tests {
                 section,
             );
             assert_eq!(editor.sidebar_order, expected, "{section:?} can be dragged");
-            let output = frame(&ctx, &mut editor, vec![]);
+            let output = frame_sized(&ctx, &mut editor, vec![], size);
             let mut last_y = 0.0;
             for item in expected {
                 let y = sidebar_handle(&output, item).y;
@@ -2946,18 +3510,20 @@ mod tests {
     }
 
     #[test]
-    fn initial_window_fits_default_canvas_and_full_metadata_sidebar() {
+    fn initial_window_fits_default_canvas_and_all_expanded_sidebar_sections() {
         let ctx = context();
         let mut editor = Editor::default();
+        editor.sidebar_collapsed.clear();
         editor.doc.sauce.as_mut().unwrap().title = "Example title".into();
         let screen = Rect::from_min_size(Pos2::ZERO, DEFAULT_WINDOW_SIZE);
         let mut render = || {
-            ctx.run(
+            crate::run_test_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen),
                     ..Default::default()
                 },
-                |ctx| editor.ui(ctx),
+                |ctx| ctx.root_ui(|ui| editor.ui(ui)),
             )
         };
         render();
@@ -2982,7 +3548,7 @@ mod tests {
                         clipped.clip_rect.contains_rect(rect) && screen.contains_rect(rect);
                     let bottom_padding = screen.bottom() - rect.bottom();
                     assert!(
-                        (8.0..=24.0).contains(&bottom_padding),
+                        bottom_padding >= 8.0,
                         "startup bottom padding below Dimensions is {bottom_padding}"
                     );
                 }
@@ -2998,7 +3564,7 @@ mod tests {
         assert!(title_visible);
         let right_padding = screen.right() - canvas_bounds.right();
         assert!(
-            (18.0..=19.0).contains(&right_padding),
+            (198.0..=199.0).contains(&right_padding),
             "startup right padding including scrollbar space is {right_padding}"
         );
         assert!(!output_has_horizontal_scrollbar(&output));
@@ -3016,17 +3582,18 @@ mod tests {
     #[test]
     fn startup_width_fits_eighty_columns_with_a_vertical_scrollbar() {
         let ctx = context();
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let mut editor = Editor::default();
         editor.doc.canvas = Canvas::new(80, 51).unwrap();
         let screen = Rect::from_min_size(Pos2::ZERO, DEFAULT_WINDOW_SIZE);
         let mut render = || {
-            ctx.run(
+            crate::run_test_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen),
                     ..Default::default()
                 },
-                |ctx| editor.ui(ctx),
+                |ctx| ctx.root_ui(|ui| editor.ui(ui)),
             )
         };
         render();
@@ -3050,8 +3617,47 @@ mod tests {
         }
         let scrollbar = scrollbar.expect("taller artwork has a vertical scrollbar");
         assert!((4.0..=5.0).contains(&(scrollbar.left() - canvas_right)));
-        assert!((8.0..=9.0).contains(&(screen.right() - scrollbar.right())));
+        assert!((188.0..=189.0).contains(&(screen.right() - scrollbar.right())));
         assert!(!output_has_horizontal_scrollbar(&output));
+    }
+
+    #[test]
+    fn default_window_fits_eighty_columns_with_minimap() {
+        for height in [25, 51] {
+            let ctx = context();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let mut editor = Editor {
+                minimap_visible: true,
+                ..Default::default()
+            };
+            editor.doc.canvas = Canvas::new(80, height).unwrap();
+            frame_sized(&ctx, &mut editor, vec![], DEFAULT_WINDOW_SIZE);
+            let output = frame_sized(&ctx, &mut editor, vec![], DEFAULT_WINDOW_SIZE);
+            let view = editor.minimap.viewport.unwrap();
+            assert_eq!(view.size.x, view.canvas_size.x);
+            assert!(!output_has_horizontal_scrollbar(&output));
+        }
+    }
+
+    #[test]
+    fn canvas_scroll_does_not_overlay_edge_fades() {
+        let ctx = context();
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        editor.doc.canvas = Canvas::new(200, 200).unwrap();
+        frame_sized(&ctx, &mut editor, vec![], DEFAULT_WINDOW_SIZE);
+        let output = frame_sized(&ctx, &mut editor, vec![], DEFAULT_WINDOW_SIZE);
+        let view = editor.minimap.viewport.unwrap();
+        assert!(view.canvas_size.x > view.size.x && view.canvas_size.y > view.size.y);
+        assert!(!output.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Mesh(mesh)
+                if mesh.calc_bounds().left() >= 290.0
+                    && mesh.calc_bounds().right() <= view.map.left()
+                    && mesh.vertices.iter().any(|vertex| vertex.color.a() == 0)
+                    && mesh.vertices.iter().any(|vertex| vertex.color.a() > 0))
+        }));
     }
 
     fn frame(
@@ -3059,13 +3665,23 @@ mod tests {
         editor: &mut Editor,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
+        frame_sized(ctx, editor, events, Vec2::new(800.0, 600.0))
+    }
+
+    fn frame_sized(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        mut events: Vec<egui::Event>,
+        size: Vec2,
+    ) -> egui::FullOutput {
+        events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::NONE));
         let input = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
             focused: true,
             events,
             ..Default::default()
         };
-        ctx.run(input, |ctx| editor.ui(ctx))
+        crate::run_test_frame(ctx, input, |ctx| ctx.root_ui(|ui| editor.ui(ui)))
     }
 
     fn key(key: egui::Key) -> egui::Event {
@@ -3120,10 +3736,25 @@ mod tests {
             )
     }
 
+    fn rgb_picker_area(output: &egui::FullOutput) -> Rect {
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(shape)
+                    if shape.rect.size() == Vec2::splat(275.0) && shape.brush.is_some() =>
+                {
+                    Some(shape.rect)
+                }
+                _ => None,
+            })
+            .expect("RGB saturation/value control is visible")
+    }
+
     #[test]
     fn cp437_picker_uses_vga_bitmaps_and_preserves_character_selection() {
         let ctx = context();
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let mut editor = Editor::default();
         editor.brush.ch = '☺';
         editor.picker_open = true;
@@ -3136,25 +3767,22 @@ mod tests {
                     && shape.galley.job.sections[0].format.font_id.family
                         == egui::FontFamily::Name(glyph::FONT_NAME.into()))
         }));
-        assert_eq!(
-            output
-                .shapes
-                .iter()
-                .filter(|clipped| matches!(clipped.shape, egui::Shape::Mesh(_)))
-                .count(),
-            253
-        );
-        let pos = output
+        let character = output
             .shapes
             .iter()
             .filter_map(|clipped| match &clipped.shape {
                 egui::Shape::Rect(shape) if shape.rect.size() == Vec2::splat(32.0) => {
-                    Some(shape.rect.center())
+                    Some(shape.rect)
                 }
                 _ => None,
             })
             .nth(b'A' as usize - 1)
             .unwrap();
+        assert!(output.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Mesh(mesh)
+                if !mesh.vertices.is_empty() && character.contains_rect(mesh.calc_bounds()))
+        }));
+        let pos = character.center();
         frame(
             &ctx,
             &mut editor,
@@ -3170,10 +3798,10 @@ mod tests {
     #[test]
     fn unicode_outside_cp437_retains_scaled_text_fallback() {
         let ctx = context();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
+        let output = crate::run_test_frame(&ctx, egui::RawInput::default(), |ctx| {
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Middle,
-                egui::Id::new("unicode"),
+                egui::Id::unique("unicode"),
             ));
             paint_cell(
                 &painter,
@@ -3195,7 +3823,7 @@ mod tests {
     #[test]
     fn sidebar_zoom_icons_and_slider_center_preserve_artwork() {
         let ctx = context();
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let mut editor = Editor::default();
         let original = editor.doc.canvas.clone();
         click_text(&ctx, &mut editor, ICON_ZOOM_IN);
@@ -3394,11 +4022,526 @@ mod tests {
     }
 
     #[test]
+    fn minimap_view_option_is_saved_without_changing_the_artwork() {
+        let ctx = context();
+        let mut editor = Editor::default();
+        editor.doc.canvas = Canvas::new(8, 4).unwrap();
+        let canvas = editor.doc.canvas.clone();
+        frame(&ctx, &mut editor, vec![]);
+        assert!(editor.minimap.viewport.is_none());
+
+        click_text(&ctx, &mut editor, "View");
+        click_text(&ctx, &mut editor, "Show minimap");
+        assert!(editor.minimap_visible);
+        let view = editor.minimap.viewport.expect("minimap is visible");
+        assert!(view.map.left() > 600.0);
+        assert_eq!(view.indicator(), view.map);
+        let center = view.map.center();
+        frame(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(center),
+                pointer_button(center, true),
+            ],
+        );
+        frame(&ctx, &mut editor, vec![pointer_button(center, false)]);
+        frame(&ctx, &mut editor, vec![]);
+        let view = editor.minimap.viewport.unwrap();
+        assert_eq!(view.indicator(), view.map);
+        assert_eq!(editor.doc.canvas, canvas);
+        assert!(!editor.dirty);
+
+        let fonts = tempfile::tempdir().unwrap();
+        let mut storage = TestStorage::default();
+        eframe::App::save(&mut editor, &mut storage);
+        let restored =
+            Editor::with_font_directory(Some(&storage), Some(fonts.path().join("fonts")));
+        assert!(restored.minimap_visible);
+
+        click_text(&ctx, &mut editor, "View");
+        click_text(&ctx, &mut editor, "Show minimap");
+        assert!(!editor.minimap_visible);
+        assert!(editor.minimap.viewport.is_none());
+        eframe::App::save(&mut editor, &mut storage);
+        assert!(
+            !Editor::with_font_directory(Some(&storage), Some(fonts.path().join("fonts")))
+                .minimap_visible
+        );
+        storage.set_string(MINIMAP_VISIBLE_KEY, "invalid".into());
+        let restored =
+            Editor::with_font_directory(Some(&storage), Some(fonts.path().join("fonts")));
+        assert!(restored.message.unwrap().contains("minimap preference"));
+        assert_eq!(editor.doc.canvas, canvas);
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn minimap_viewport_outline_does_not_tint_the_artwork() {
+        let ctx = context();
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        editor.doc.canvas = Canvas::new(200, 200).unwrap();
+        let screen = Vec2::new(1000.0, 700.0);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let output = frame_sized(&ctx, &mut editor, vec![], screen);
+        let view = editor.minimap.viewport.unwrap();
+        let indicator = view.indicator();
+        assert!(indicator.width() < view.map.width());
+        assert!(indicator.height() < view.map.height());
+
+        let rectangles: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.rect == indicator => Some(rect),
+                _ => None,
+            })
+            .collect();
+        assert!(rectangles.iter().any(|rect| rect.stroke.width > 0.0));
+        assert!(
+            rectangles
+                .iter()
+                .all(|rect| rect.fill == Color32::TRANSPARENT),
+            "the viewport indicator must not tint the artwork"
+        );
+    }
+
+    #[test]
+    fn minimap_tracks_scrolling_and_clicking_and_dragging_navigate_both_axes() {
+        let ctx = context();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        editor.doc.canvas = Canvas::new(200, 200).unwrap();
+        let original = editor.doc.canvas.clone();
+        let screen = Vec2::new(1000.0, 700.0);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let initial = editor.minimap.viewport.unwrap();
+        assert_eq!(initial.offset, Vec2::ZERO);
+        assert!(initial.indicator().height() < initial.map.height());
+        assert!(initial.indicator().width() < initial.map.width());
+
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(Pos2::new(350.0, 200.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -240.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            screen,
+        );
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let scrolled = editor.minimap.viewport.unwrap();
+        assert!(scrolled.offset.y > 0.0);
+        assert!(scrolled.indicator().top() > initial.indicator().top());
+
+        let center = scrolled.map.center();
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(center),
+                pointer_button(center, true),
+            ],
+            screen,
+        );
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![pointer_button(center, false)],
+            screen,
+        );
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let centered = editor.minimap.viewport.unwrap();
+        assert!((centered.indicator().center() - centered.map.center()).length() < 2.0);
+
+        let bottom_right = centered.map.right_bottom() - Vec2::splat(1.0);
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(bottom_right),
+                pointer_button(bottom_right, true),
+            ],
+            screen,
+        );
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![pointer_button(bottom_right, false)],
+            screen,
+        );
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let bottom = editor.minimap.viewport.unwrap();
+        let max_offset = bottom.canvas_size - bottom.size;
+        assert!(
+            (bottom.offset - max_offset).length() < 2.0,
+            "bottom viewport: {bottom:?}, maximum offset: {max_offset:?}"
+        );
+        assert!((bottom.indicator().bottom() - bottom.map.bottom()).abs() < 0.1);
+        assert!((bottom.indicator().right() - bottom.map.right()).abs() < 0.1);
+
+        let start = bottom.indicator().center();
+        let end = Pos2::new(start.x, bottom.map.top());
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(start),
+                pointer_button(start, true),
+            ],
+            screen,
+        );
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![egui::Event::PointerMoved(end)],
+            screen,
+        );
+        frame_sized(&ctx, &mut editor, vec![pointer_button(end, false)], screen);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let top = editor.minimap.viewport.unwrap();
+        assert!(top.offset.y < 1.0);
+        assert!((top.offset.x - bottom.offset.x).abs() < 2.0);
+        assert!((top.indicator().top() - top.map.top()).abs() < 0.1);
+        assert_eq!(editor.doc.canvas, original);
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn minimap_navigation_cancels_pending_canvas_scroll() {
+        let ctx = context();
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        editor.doc.canvas = Canvas::new(200, 200).unwrap();
+        let screen = Vec2::new(1000.0, 700.0);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let output = frame_sized(&ctx, &mut editor, vec![], screen);
+        let canvas = canvas_cell_center(&output, 0, 0);
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(canvas),
+                pointer_button(canvas, true),
+            ],
+            screen,
+        );
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![pointer_button(canvas, false)],
+            screen,
+        );
+        frame_sized(&ctx, &mut editor, vec![key(egui::Key::End)], screen);
+        assert_eq!(editor.cursor.0, 199);
+
+        let center = editor.minimap.viewport.unwrap().map.center();
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(center),
+                pointer_button(center, true),
+            ],
+            screen,
+        );
+        frame_sized(
+            &ctx,
+            &mut editor,
+            vec![pointer_button(center, false)],
+            screen,
+        );
+        for _ in 0..30 {
+            frame_sized(&ctx, &mut editor, vec![], screen);
+        }
+        let view = editor.minimap.viewport.unwrap();
+        assert!(
+            (view.indicator().center() - view.map.center()).length() < 2.0,
+            "minimap navigation should not resume the earlier cursor scroll: {view:?}"
+        );
+    }
+
+    #[test]
+    fn minimap_navigation_preserves_single_axis_scrollbar_layout() {
+        for (width, height) in [(40, 200), (200, 20)] {
+            let ctx = context();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let mut editor = Editor {
+                minimap_visible: true,
+                ..Default::default()
+            };
+            editor.doc.canvas = Canvas::new(width, height).unwrap();
+            let screen = Vec2::new(1000.0, 700.0);
+            frame_sized(&ctx, &mut editor, vec![], screen);
+            frame_sized(&ctx, &mut editor, vec![], screen);
+            let before = editor.minimap.viewport.unwrap();
+            let max_offset = (before.canvas_size - before.size).max(Vec2::ZERO);
+            assert_ne!(max_offset.x > 0.0, max_offset.y > 0.0);
+
+            let end = before.map.right_bottom() - Vec2::splat(1.0);
+            frame_sized(
+                &ctx,
+                &mut editor,
+                vec![egui::Event::PointerMoved(end), pointer_button(end, true)],
+                screen,
+            );
+            frame_sized(&ctx, &mut editor, vec![pointer_button(end, false)], screen);
+            frame_sized(&ctx, &mut editor, vec![], screen);
+            let after = editor.minimap.viewport.unwrap();
+            assert_eq!(after.size, before.size);
+            assert!(
+                (after.offset - max_offset).length() < 2.0,
+                "canvas {width}x{height}: {after:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimap_indicator_tracks_zoom_and_window_size() {
+        let ctx = context();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        editor.doc.canvas = Canvas::new(80, 80).unwrap();
+        let screen = Vec2::new(1000.0, 700.0);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let initial = editor.minimap.viewport.unwrap();
+
+        editor.zoom_percent = 200.0;
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        frame_sized(&ctx, &mut editor, vec![], screen);
+        let zoomed = editor.minimap.viewport.unwrap();
+        assert_eq!(zoomed.map, initial.map);
+        assert_eq!(zoomed.canvas_size, initial.canvas_size * 2.0);
+        assert!(zoomed.indicator().width() < initial.indicator().width());
+        assert!(zoomed.indicator().height() < initial.indicator().height());
+
+        let larger_screen = Vec2::new(1200.0, 900.0);
+        frame_sized(&ctx, &mut editor, vec![], larger_screen);
+        frame_sized(&ctx, &mut editor, vec![], larger_screen);
+        let resized = editor.minimap.viewport.unwrap();
+        assert!(resized.indicator().width() > zoomed.indicator().width());
+        assert!(resized.indicator().height() > zoomed.indicator().height());
+        assert_eq!(editor.doc.canvas, Canvas::new(80, 80).unwrap());
+        assert!(!editor.dirty);
+    }
+
+    fn frame_minimap(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+    ) -> (egui::TextureId, Option<egui::ColorImage>) {
+        frame_minimap_with_events(ctx, editor, vec![])
+    }
+
+    fn frame_minimap_with_events(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        events: Vec<egui::Event>,
+    ) -> (egui::TextureId, Option<egui::ColorImage>) {
+        let mut output = ctx.run_pass(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |ctx| ctx.root_ui(|ui| editor.ui(ui)),
+        );
+        let map = editor.minimap.viewport.map(|view| view.map);
+        let id = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if Some(mesh.calc_bounds()) == map => Some(mesh.texture_id),
+                _ => None,
+            });
+        let image = id
+            .and_then(|id| output.textures_delta.set.get(&id))
+            .and_then(|deltas| deltas.last())
+            .map(|delta| match &delta.image {
+                egui::ImageData::Color(image) => image.as_ref().clone(),
+            });
+        output.textures_delta.clear();
+        (id.expect("minimap texture is drawn"), image)
+    }
+
+    #[test]
+    fn resizing_minimap_reuses_preview_texture_while_updating_viewport() {
+        let ctx = context();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        editor.doc.canvas = Canvas::new(80, 80).unwrap();
+        let (id, image) = frame_minimap(&ctx, &mut editor);
+        assert!(image.is_some());
+        frame_minimap(&ctx, &mut editor);
+        let initial = editor.minimap.viewport.unwrap();
+        let edge = Pos2::new(1000.0 - MINIMAP_DEFAULT_WIDTH, initial.map.center().y);
+        for events in [
+            vec![egui::Event::PointerMoved(edge), pointer_button(edge, true)],
+            vec![egui::Event::PointerMoved(edge - Vec2::new(70.0, 0.0))],
+            vec![],
+        ] {
+            let (texture, image) = frame_minimap_with_events(&ctx, &mut editor, events);
+            assert_eq!(texture, id);
+            assert!(
+                image.is_none(),
+                "resizing must not rebuild or upload the preview"
+            );
+        }
+        let wider = editor.minimap.viewport.unwrap();
+        assert!(wider.map.width() > initial.map.width() + 40.0);
+        assert!(wider.size.x < initial.size.x);
+        assert_ne!(wider.indicator(), initial.indicator());
+
+        let narrower = edge + Vec2::new(30.0, 0.0);
+        for events in [
+            vec![egui::Event::PointerMoved(narrower)],
+            vec![],
+            vec![pointer_button(narrower, false)],
+            vec![],
+        ] {
+            let (texture, image) = frame_minimap_with_events(&ctx, &mut editor, events);
+            assert_eq!(texture, id);
+            assert!(
+                image.is_none(),
+                "releasing resize must not rebuild the preview"
+            );
+        }
+        let resized = editor.minimap.viewport.unwrap();
+        assert!(resized.map.width() < initial.map.width() - 20.0);
+        assert!(resized.size.x > initial.size.x);
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn drawing_with_minimap_updates_only_a_small_texture_region() {
+        let ctx = context();
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        let (id, initial) = frame_minimap(&ctx, &mut editor);
+        let full_pixels = initial.unwrap().pixels.len();
+        frame_minimap(&ctx, &mut editor);
+        let output = frame_sized(&ctx, &mut editor, vec![], Vec2::new(1000.0, 700.0));
+        let start = canvas_cell_center(&output, 10, 10);
+        frame_minimap_with_events(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(start),
+                pointer_button(start, true),
+            ],
+        );
+        let started = std::time::Instant::now();
+        let mut uploaded_pixels = 0;
+        for x in 11..31 {
+            let position = start + Vec2::new((x - 10) as f32 * glyph::CELL_SIZE.x, 0.0);
+            let (texture, patch) = frame_minimap_with_events(
+                &ctx,
+                &mut editor,
+                vec![egui::Event::PointerMoved(position)],
+            );
+            assert_eq!(texture, id);
+            assert_eq!(editor.doc.canvas.get(x, 10), Some(&editor.brush));
+            let patch = patch.expect("drawing updates the minimap immediately");
+            assert!(patch.pixels.iter().any(|pixel| *pixel != Color32::BLACK));
+            uploaded_pixels += patch.pixels.len();
+        }
+        eprintln!("20 drawing frames with minimap: {:?}", started.elapsed());
+        assert!(
+            uploaded_pixels < full_pixels,
+            "single-cell edits must not rerender and upload the entire minimap: {uploaded_pixels} pixels"
+        );
+        let end = start + Vec2::new(20.0 * glyph::CELL_SIZE.x, 0.0);
+        assert!(
+            frame_minimap_with_events(&ctx, &mut editor, vec![pointer_button(end, false)])
+                .1
+                .is_none()
+        );
+        assert!(editor.dirty);
+    }
+
+    #[test]
+    fn minimap_updates_for_edits_undo_and_selection_preview_but_not_for_idle_frames() {
+        let ctx = context();
+        let mut editor = Editor {
+            minimap_visible: true,
+            ..Default::default()
+        };
+        editor.doc.canvas = Canvas::new(4, 4).unwrap();
+        let (id, image) = frame_minimap(&ctx, &mut editor);
+        assert_eq!(image.unwrap()[(0, 0)], Color32::BLACK);
+        assert!(frame_minimap(&ctx, &mut editor).1.is_none());
+
+        let red = Cell {
+            ch: '█',
+            fg: Color::Rgb(255, 0, 0),
+            ..Default::default()
+        };
+        editor.history.paint(&mut editor.doc.canvas, 0, 0, red);
+        let (updated_id, image) = frame_minimap(&ctx, &mut editor);
+        assert_eq!(id, updated_id);
+        assert_eq!(image.unwrap()[(0, 0)], Color32::RED);
+
+        editor.selection = Some(Selection {
+            start: (0, 0),
+            end: (0, 0),
+        });
+        editor.begin_selection_drag((0, 0)).unwrap();
+        editor.update_selection_drag((2, 2));
+        let image = frame_minimap(&ctx, &mut editor).1.unwrap();
+        assert_eq!(image[(0, 0)], Color32::BLACK);
+        assert_eq!(image[(2 * glyph::WIDTH, 2 * glyph::HEIGHT)], Color32::RED);
+        assert_eq!(editor.doc.canvas.get(0, 0), Some(&red));
+
+        editor.selection_drag = None;
+        editor.undo();
+        assert_eq!(
+            frame_minimap(&ctx, &mut editor).1.unwrap()[(0, 0)],
+            Color32::BLACK
+        );
+        editor.redo();
+        assert_eq!(
+            frame_minimap(&ctx, &mut editor).1.unwrap()[(0, 0)],
+            Color32::RED
+        );
+        editor.new_image();
+        assert_eq!(
+            frame_minimap(&ctx, &mut editor).1.unwrap()[(0, 0)],
+            Color32::BLACK
+        );
+    }
+
+    #[test]
     fn zoomed_typing_selection_moving_and_pasting_use_character_cell_coordinates() {
         for zoom_percent in [50.0, 149.0, 200.0] {
             let ctx = context();
-            let mut editor = Editor::default();
-            editor.zoom_percent = zoom_percent;
+            let mut editor = Editor {
+                zoom_percent,
+                ..Default::default()
+            };
             editor.doc.canvas = Canvas::new(12, 6).unwrap();
             let background = Color::Rgb(3, 7, 11);
             editor.doc.canvas.clear(Cell {
@@ -3483,7 +4626,7 @@ mod tests {
     fn images_over_fifty_rows_have_a_visible_scrollbar_at_actual_size() {
         for height in [50, 51] {
             let ctx = context();
-            ctx.style_mut(|style| style.animation_time = 0.0);
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut editor = Editor::default();
             editor.doc.canvas = Canvas::new(80, height).unwrap();
             editor.doc.canvas.set(
@@ -3496,7 +4639,8 @@ mod tests {
                 },
             );
             let mut render = |events| {
-                ctx.run(
+                crate::run_test_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             Pos2::ZERO,
@@ -3506,7 +4650,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ctx| editor.ui(ctx),
+                    |ctx| ctx.root_ui(|ui| editor.ui(ui)),
                 )
             };
             render(vec![]);
@@ -3532,6 +4676,8 @@ mod tests {
                     egui::Event::MouseWheel {
                         unit: egui::MouseWheelUnit::Point,
                         delta: Vec2::new(0.0, -120.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
                         modifiers: egui::Modifiers::NONE,
                     },
                 ]);
@@ -3546,86 +4692,169 @@ mod tests {
     }
 
     #[test]
-    fn used_colors_merge_formats_and_follow_displayed_brightness() {
+    fn used_colors_list_only_colors_picked_this_session() {
+        let ctx = context();
         let mut editor = Editor::default();
-        editor.doc.canvas = Canvas::new(3, 1).unwrap();
         editor.doc.canvas.set(
             0,
             0,
             Cell {
-                fg: Color::Ansi(1),
+                fg: Color::Rgb(8, 19, 29),
                 ..Cell::default()
             },
         );
+        frame(&ctx, &mut editor, vec![]);
+        assert!(
+            editor.picked_colors.is_empty(),
+            "artwork colors are not listed"
+        );
+        let output = frame(&ctx, &mut editor, vec![]);
+        assert!(output.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Text(shape)
+                if shape.galley.text() == "Colors you pick appear here.")
+        }));
+        let swatch = |output: &egui::FullOutput, color: Color| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(shape)
+                        if shape.rect.size() == Vec2::new(24.0, 20.0)
+                            && shape.fill == display_color(color) =>
+                    {
+                        Some(shape.rect.center())
+                    }
+                    _ => None,
+                })
+                .expect("ANSI swatch is visible")
+        };
+        // Choosing the color that is already the foreground still counts as a pick.
+        let current = editor.brush.fg;
+        let pos = swatch(&output, current);
+        frame(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(pos),
+                color_click(pos, true, false),
+            ],
+        );
+        frame(&ctx, &mut editor, vec![color_click(pos, false, false)]);
+        assert_eq!(editor.brush.fg, current);
+        assert_eq!(editor.picked_colors, [current]);
+        editor.picked_colors.clear();
+        let output = frame(&ctx, &mut editor, vec![]);
+        let pos = swatch(&output, Color::Ansi(12));
+        for _ in 0..2 {
+            frame(
+                &ctx,
+                &mut editor,
+                vec![egui::Event::PointerMoved(pos), color_click(pos, true, true)],
+            );
+            frame(&ctx, &mut editor, vec![color_click(pos, false, true)]);
+        }
+        assert_eq!(editor.picked_colors, [Color::Ansi(12)], "listed once");
+
+        // RGB picker drags are remembered once, when the picker closes.
+        editor.rgb_open = true;
+        for green in 1..=3 {
+            editor.brush.fg = Color::Rgb(0, green, 0);
+            editor.remember_picked_colors();
+        }
+        editor.pending_gradient_end = Some(Color::Indexed(201));
+        editor.remember_picked_colors();
+        assert_eq!(editor.picked_colors, [Color::Ansi(12)]);
+        editor.rgb_open = false;
+        editor.remember_picked_colors();
+        assert_eq!(
+            editor.picked_colors,
+            [Color::Ansi(12), Color::Indexed(201), Color::Rgb(0, 3, 0)]
+        );
+    }
+
+    #[test]
+    fn eyedropper_picks_displayed_cell_colors_without_editing_artwork() {
+        let ctx = context();
+        let mut editor = Editor::default();
         editor.doc.canvas.set(
             1,
             0,
             Cell {
-                fg: Color::Indexed(1),
-                bg: Color::Rgb(170, 0, 0),
-                ..Cell::default()
-            },
-        );
-        editor.doc.canvas.set(
-            2,
-            0,
-            Cell {
-                fg: Color::Rgb(8, 19, 29),
-                bg: Color::Indexed(201),
-                ..Cell::default()
-            },
-        );
-        assert_eq!(
-            artwork_colors(&editor.doc),
-            vec![
-                Color::Ansi(0),
-                Color::Rgb(8, 19, 29),
-                Color::Ansi(1),
-                Color::Indexed(201)
-            ]
-        );
-        editor.doc.canvas = Canvas::new(1, 1).unwrap();
-        editor.doc.canvas.set(
-            0,
-            0,
-            Cell {
+                ch: 'A',
                 fg: Color::Ansi(1),
-                bg: Color::Ansi(2),
+                bg: Color::Rgb(8, 19, 29),
                 attrs: ansi_core::canvas::Attributes {
                     bold: true,
-                    blink: true,
-                    inverse: true,
                     ..Default::default()
                 },
-                ..Cell::default()
             },
         );
-        assert_eq!(
-            artwork_colors(&editor.doc),
-            vec![Color::Ansi(2), Color::Ansi(9)]
+        let original = editor.doc.canvas.clone();
+        let output = frame(&ctx, &mut editor, vec![]);
+        let tool = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) if shape.galley.text() == ICON_COLORIZE.codepoint => {
+                    Some(shape.galley.rect.translate(shape.pos.to_vec2()).center())
+                }
+                _ => None,
+            })
+            .expect("eyedropper tool is visible");
+        frame(
+            &ctx,
+            &mut editor,
+            vec![egui::Event::PointerMoved(tool), pointer_button(tool, true)],
         );
-        let mut record = [0; 128];
-        record[..7].copy_from_slice(b"SAUCE00");
-        record[105] = 1;
-        editor.doc.sauce = ansi_core::sauce::parse(&record).unwrap().1;
+        frame(&ctx, &mut editor, vec![pointer_button(tool, false)]);
+        assert!(editor.eyedropper);
+        let brush = editor.brush;
+        for background in [false, true] {
+            let output = frame(&ctx, &mut editor, vec![]);
+            let cell = canvas_cell_center(&output, 1, 0);
+            frame(
+                &ctx,
+                &mut editor,
+                vec![
+                    egui::Event::PointerMoved(cell),
+                    color_click(cell, true, background),
+                ],
+            );
+            frame(
+                &ctx,
+                &mut editor,
+                vec![color_click(cell, false, background)],
+            );
+        }
         assert_eq!(
-            artwork_colors(&editor.doc),
-            vec![Color::Ansi(10), Color::Ansi(9)]
+            editor.brush.fg,
+            Color::Ansi(9),
+            "bold brightens the picked color"
         );
+        assert_eq!(editor.brush.bg, Color::Rgb(8, 19, 29));
+        assert_eq!(
+            (editor.brush.ch, editor.brush.attrs),
+            (brush.ch, brush.attrs)
+        );
+        assert_eq!(
+            editor.picked_colors,
+            [Color::Ansi(9), Color::Rgb(8, 19, 29)]
+        );
+        assert_eq!(editor.doc.canvas, original);
+        assert!(!editor.dirty);
     }
 
     #[test]
     fn used_swatches_select_foreground_and_background_without_editing_artwork() {
         let ctx = context();
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let mut editor = Editor::default();
-        editor.doc.canvas = Canvas::new(1, 1).unwrap();
         let cell = Cell {
             fg: Color::Rgb(8, 19, 29),
             bg: Color::Indexed(201),
             ..Cell::default()
         };
-        editor.doc.canvas.set(0, 0, cell);
+        editor.picked_colors = vec![cell.fg, cell.bg];
         let original = editor.doc.canvas.clone();
         frame(&ctx, &mut editor, vec![]);
         for (background, used) in [(false, cell.fg), (true, cell.bg)] {
@@ -3675,64 +4904,13 @@ mod tests {
     }
 
     #[test]
-    fn used_swatches_update_after_typing_undo_redo_cut_paste_and_resize() {
-        let ctx = context();
-        let mut editor = Editor::default();
-        editor.doc.canvas = Canvas::new(2, 1).unwrap();
-        let color = Color::Rgb(8, 19, 29);
-        let count = |output: &egui::FullOutput| {
-            output
-                .shapes
-                .iter()
-                .filter(|clipped| {
-                    matches!(&clipped.shape, egui::Shape::Rect(shape)
-                if shape.rect.size() == Vec2::new(24.0, 20.0) && shape.fill == display_color(color))
-                })
-                .count()
-        };
-        frame(&ctx, &mut editor, vec![]);
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 0);
-        editor.brush.fg = color;
-        editor.canvas_input(&[egui::Event::Text("A".into())]);
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 1);
-        editor.undo();
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 0);
-        editor.redo();
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 1);
-        editor.selection = Some(Selection {
-            start: (0, 0),
-            end: (0, 0),
-        });
-        let text = editor.copy_selection(true).unwrap();
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 0);
-        editor.cursor = (1, 0);
-        editor.paste(&text).unwrap();
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 1);
-        editor.history.resize(&mut editor.doc.canvas, 1, 1).unwrap();
-        editor.clamp_cursor();
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 0);
-        editor.undo();
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 1);
-        editor.doc.canvas.clear(Cell::default());
-        assert_eq!(count(&frame(&ctx, &mut editor, vec![])), 0);
-    }
-
-    #[test]
     fn large_used_palettes_are_virtualized_and_scroll_to_the_last_color() {
         let ctx = context();
-        ctx.style_mut(|style| style.animation_time = 0.0);
-        let mut editor = Editor::default();
-        editor.doc.canvas = Canvas::new(64, 1).unwrap();
-        for n in 0..64 {
-            editor.doc.canvas.set(
-                n,
-                0,
-                Cell {
-                    fg: Color::Rgb(176, n as u8, 20),
-                    ..Cell::default()
-                },
-            );
-        }
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let mut editor = Editor {
+            picked_colors: (0..64).map(|n| Color::Rgb(176, n, 20)).collect(),
+            ..Default::default()
+        };
         frame(&ctx, &mut editor, vec![]);
         let output = frame(&ctx, &mut editor, vec![]);
         let visible: Vec<_> = output
@@ -3759,6 +4937,8 @@ mod tests {
                 egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta: Vec2::new(0.0, -1000.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: egui::Modifiers::NONE,
                 },
             ],
@@ -3852,7 +5032,7 @@ mod tests {
         for background in [false, true] {
             for trigger in 0..3 {
                 let ctx = context();
-                ctx.style_mut(|style| style.animation_time = 0.0);
+                ctx.global_style_mut(|style| style.animation_time = 0.0);
                 let mut editor = Editor::default();
                 editor.brush.fg = Color::Ansi(3);
                 editor.brush.bg = Color::Indexed(201);
@@ -3864,7 +5044,7 @@ mod tests {
                     .iter()
                     .find_map(|clipped| match &clipped.shape {
                         egui::Shape::Text(shape)
-                            if trigger == 0 && shape.galley.text() == ICON_PALETTE =>
+                            if trigger == 0 && shape.galley.text() == ICON_PALETTE.codepoint =>
                         {
                             Some(shape.galley.rect.translate(shape.pos.to_vec2()).center())
                         }
@@ -3905,18 +5085,7 @@ mod tests {
                 assert!(output.shapes.iter().any(|clipped| {
                     matches!(&clipped.shape, egui::Shape::Text(shape) if shape.galley.text() == title)
                 }));
-                let pos = output
-                    .shapes
-                    .iter()
-                    .find_map(|clipped| match &clipped.shape {
-                        egui::Shape::Mesh(mesh)
-                            if mesh.calc_bounds().size() == Vec2::splat(275.0) =>
-                        {
-                            Some(mesh.calc_bounds().center())
-                        }
-                        _ => None,
-                    })
-                    .expect("RGB saturation/value control is visible");
+                let pos = rgb_picker_area(&output).center();
                 frame(
                     &ctx,
                     &mut editor,
@@ -3941,10 +5110,380 @@ mod tests {
     }
 
     #[test]
+    fn palette_colors_recolor_the_active_selection_as_one_undo_step() {
+        for background in [false, true] {
+            let ctx = context();
+            let mut editor = Editor::default();
+            let cell = Cell {
+                ch: 'A',
+                fg: Color::Ansi(3),
+                bg: Color::Indexed(201),
+                attrs: ansi_core::canvas::Attributes {
+                    bold: true,
+                    ..Default::default()
+                },
+            };
+            editor.doc.canvas.clear(cell);
+            editor.selection = Some(Selection {
+                start: (3, 2),
+                end: (1, 1),
+            });
+            let output = frame(&ctx, &mut editor, vec![]);
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(shape)
+                        if shape.rect.size() == Vec2::new(24.0, 20.0)
+                            && shape.fill == display_color(Color::Ansi(12)) =>
+                    {
+                        Some(shape.rect.center())
+                    }
+                    _ => None,
+                })
+                .expect("ANSI swatch is visible");
+            frame(
+                &ctx,
+                &mut editor,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    color_click(pos, true, background),
+                ],
+            );
+            frame(&ctx, &mut editor, vec![color_click(pos, false, background)]);
+            let mut recolored = cell;
+            if background {
+                recolored.bg = Color::Ansi(12);
+            } else {
+                recolored.fg = Color::Ansi(12);
+            }
+            for y in 0..editor.doc.canvas.height() {
+                for x in 0..editor.doc.canvas.width() {
+                    let inside = (1..=3).contains(&x) && (1..=2).contains(&y);
+                    let expected = if inside { recolored } else { cell };
+                    assert_eq!(*editor.doc.canvas.get(x, y).unwrap(), expected);
+                }
+            }
+            assert!(editor.dirty);
+            editor.undo();
+            assert!(editor.doc.canvas.get(2, 2).unwrap() == &cell);
+            assert!(!editor.history.undo(&mut editor.doc.canvas));
+        }
+    }
+
+    #[test]
+    fn rgb_picker_drag_recolors_the_selection_as_one_undo_step() {
+        // (opened with the modifier, dragged with the modifier)
+        for (open_modified, drag_modified) in [(false, false), (true, false), (false, true)] {
+            let gradient = open_modified || drag_modified;
+            let ctx = context();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let mut editor = Editor {
+                selection: Some(Selection {
+                    start: (0, 0),
+                    end: (1, 0),
+                }),
+                ..Default::default()
+            };
+            let brush = editor.brush;
+            let original = editor.doc.canvas.clone();
+            let output = frame(&ctx, &mut editor, vec![]);
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(shape) if shape.galley.text() == ICON_PALETTE.codepoint => {
+                        Some(shape.galley.rect.translate(shape.pos.to_vec2()).center())
+                    }
+                    _ => None,
+                })
+                .expect("RGB control is visible");
+            let output = if open_modified {
+                frame_with_command(
+                    &ctx,
+                    &mut editor,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        modified_color_click(pos, true, true),
+                    ],
+                );
+                frame_with_command(
+                    &ctx,
+                    &mut editor,
+                    vec![modified_color_click(pos, false, true)],
+                );
+                frame(&ctx, &mut editor, vec![])
+            } else {
+                frame(
+                    &ctx,
+                    &mut editor,
+                    vec![egui::Event::PointerMoved(pos), color_click(pos, true, true)],
+                );
+                frame(&ctx, &mut editor, vec![color_click(pos, false, true)]);
+                frame(&ctx, &mut editor, vec![])
+            };
+            let title = if open_modified {
+                "Background gradient end RGB color"
+            } else {
+                "Background RGB color"
+            };
+            assert!(output.shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Text(shape) if shape.galley.text() == title)
+            }));
+            let area = rgb_picker_area(&output);
+            let start = area.center();
+            let drag = |ctx: &egui::Context, editor: &mut Editor, events: Vec<egui::Event>| {
+                if drag_modified {
+                    frame_with_command(ctx, editor, events)
+                } else {
+                    frame(ctx, editor, events)
+                }
+            };
+            drag(
+                &ctx,
+                &mut editor,
+                vec![
+                    egui::Event::PointerMoved(start),
+                    pointer_button(start, true),
+                ],
+            );
+            let first = editor.doc.canvas.get(1, 0).unwrap().bg;
+            for step in 1..=3 {
+                let point = start + Vec2::new(20.0 * step as f32, -20.0 * step as f32);
+                drag(&ctx, &mut editor, vec![egui::Event::PointerMoved(point)]);
+            }
+            let end = start + Vec2::new(60.0, -60.0);
+            drag(&ctx, &mut editor, vec![pointer_button(end, false)]);
+            let last = editor.doc.canvas.get(1, 0).unwrap().bg;
+            assert!(matches!(last, Color::Rgb(..)));
+            assert_ne!(last, first, "the drag changed the color repeatedly");
+            if gradient {
+                assert_eq!(editor.brush, brush, "gradient picks keep the brush");
+                assert_eq!(
+                    editor.doc.canvas.get(0, 0).unwrap().bg,
+                    Color::Rgb(0, 0, 0),
+                    "the gradient starts at the brush color, as RGB"
+                );
+            } else {
+                assert_eq!(last, editor.brush.bg);
+            }
+            assert_eq!(editor.doc.canvas.get(2, 0), original.get(2, 0));
+            editor.undo();
+            assert_eq!(editor.doc.canvas, original);
+            assert!(!editor.history.undo(&mut editor.doc.canvas));
+        }
+    }
+
+    fn modified_color_click(pos: Pos2, pressed: bool, background: bool) -> egui::Event {
+        let egui::Event::PointerButton { button, .. } = color_click(pos, pressed, background)
+        else {
+            unreachable!()
+        };
+        egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::COMMAND,
+        }
+    }
+
+    fn frame_with_command(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        mut events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            focused: true,
+            events,
+            ..Default::default()
+        };
+        crate::run_test_frame(ctx, input, |ctx| ctx.root_ui(|ui| editor.ui(ui)))
+    }
+
+    #[test]
+    fn command_click_fades_the_selection_from_the_brush_color_along_its_drag() {
+        for background in [false, true] {
+            let ctx = context();
+            let mut editor = Editor::default();
+            editor.brush.fg = Color::Ansi(0);
+            editor.brush.bg = Color::Ansi(0);
+            let brush = editor.brush;
+            editor.selection = Some(Selection {
+                start: (2, 1),
+                end: (0, 0),
+            });
+            let original = editor.doc.canvas.clone();
+            let output = frame(&ctx, &mut editor, vec![]);
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(shape)
+                        if shape.rect.size() == Vec2::new(24.0, 20.0)
+                            && shape.fill == display_color(Color::Ansi(15)) =>
+                    {
+                        Some(shape.rect.center())
+                    }
+                    _ => None,
+                })
+                .expect("ANSI swatch is visible");
+            frame_with_command(
+                &ctx,
+                &mut editor,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    modified_color_click(pos, true, background),
+                ],
+            );
+            frame_with_command(
+                &ctx,
+                &mut editor,
+                vec![modified_color_click(pos, false, background)],
+            );
+            assert_eq!(editor.brush, brush, "gradient picks keep the brush");
+            let component = |cell: &Cell| if background { cell.bg } else { cell.fg };
+            for y in 0..2 {
+                for x in 0..3 {
+                    let expected = gradient_at(
+                        Color::Ansi(0),
+                        Color::Ansi(15),
+                        (2, 1),
+                        (0, 0),
+                        (x, y),
+                        GradientPalette::Ansi,
+                    );
+                    let cell = editor.doc.canvas.get(x, y).unwrap();
+                    assert_eq!(component(cell), expected);
+                    assert!(
+                        matches!(component(cell), Color::Ansi(_)),
+                        "16-color endpoints keep a 16-color gradient"
+                    );
+                }
+            }
+            let canvas = &editor.doc.canvas;
+            assert_eq!(component(canvas.get(2, 1).unwrap()), Color::Ansi(0));
+            assert_eq!(component(canvas.get(0, 0).unwrap()), Color::Ansi(15));
+            assert_ne!(component(canvas.get(1, 0).unwrap()), Color::Ansi(0));
+            assert_eq!(canvas.get(3, 0), original.get(3, 0));
+            assert_eq!(canvas.get(0, 2), original.get(0, 2));
+            assert!(editor.dirty);
+            editor.undo();
+            assert_eq!(editor.doc.canvas, original);
+            assert!(!editor.history.undo(&mut editor.doc.canvas));
+        }
+    }
+
+    #[test]
+    fn command_click_without_a_selection_explains_and_keeps_the_brush() {
+        let ctx = context();
+        let mut editor = Editor::default();
+        let brush = editor.brush;
+        let output = frame(&ctx, &mut editor, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(shape)
+                    if shape.rect.size() == Vec2::new(24.0, 20.0)
+                        && shape.fill == display_color(Color::Ansi(12)) =>
+                {
+                    Some(shape.rect.center())
+                }
+                _ => None,
+            })
+            .expect("ANSI swatch is visible");
+        frame_with_command(
+            &ctx,
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(pos),
+                modified_color_click(pos, true, false),
+            ],
+        );
+        frame_with_command(
+            &ctx,
+            &mut editor,
+            vec![modified_color_click(pos, false, false)],
+        );
+        assert_eq!(editor.brush, brush);
+        assert!(editor.message.unwrap().contains("Select an area first"));
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn gradient_direction_controls_redraw_the_last_gradient_in_one_undo_step() {
+        let ctx = context();
+        let mut editor = Editor::default();
+        let original = editor.doc.canvas.clone();
+        let (black, red) = (Color::Rgb(0, 0, 0), Color::Rgb(255, 0, 0));
+        editor.brush.bg = black;
+        editor.selection = Some(Selection {
+            start: (0, 0),
+            end: (3, 2),
+        });
+        let pick = GradientPick {
+            background: true,
+            end: red,
+        };
+        assert!(editor.apply_gradient(pick, None).unwrap());
+        let bg = |editor: &Editor, x, y| editor.doc.canvas.get(x, y).unwrap().bg;
+        assert_eq!((bg(&editor, 0, 0), bg(&editor, 3, 2)), (black, red));
+        let click = |editor: &mut Editor, icon: MaterialIcon| {
+            let output = frame(&ctx, editor, vec![]);
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(shape) if shape.galley.text() == icon.codepoint => {
+                        Some(shape.galley.rect.translate(shape.pos.to_vec2()).center())
+                    }
+                    _ => None,
+                })
+                .expect("gradient direction control is visible");
+            frame(
+                &ctx,
+                editor,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    color_click(pos, true, false),
+                ],
+            );
+            frame(&ctx, editor, vec![color_click(pos, false, false)]);
+        };
+        click(&mut editor, ICON_EAST);
+        assert_eq!(editor.gradient_direction, GradientDirection::LeftToRight);
+        for y in 0..3 {
+            assert_eq!((bg(&editor, 0, y), bg(&editor, 3, y)), (black, red));
+        }
+        click(&mut editor, ICON_SOUTH);
+        click(&mut editor, ICON_SYNC_ALT);
+        assert!(editor.gradient_reversed);
+        for x in 0..4 {
+            assert_eq!((bg(&editor, x, 0), bg(&editor, x, 2)), (red, black));
+        }
+        assert_eq!(editor.brush.bg, black, "direction changes keep the brush");
+        editor.undo();
+        assert_eq!(editor.doc.canvas, original, "one undo removes the gradient");
+        assert!(!editor.history.undo(&mut editor.doc.canvas));
+
+        // Once the selection changes, directions only apply to later gradients.
+        editor.selection = Some(Selection {
+            start: (5, 5),
+            end: (6, 6),
+        });
+        assert!(!editor
+            .set_gradient_direction(GradientDirection::Drag, false)
+            .unwrap());
+        assert_eq!(editor.doc.canvas, original);
+    }
+
+    #[test]
     fn indexed_palette_opens_without_changing_color_and_selects_all_color_ranges() {
         for (background, index) in [(false, 201), (true, 16), (false, 255), (true, 0)] {
             let ctx = context();
-            ctx.style_mut(|style| style.animation_time = 0.0);
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut editor = Editor::default();
             editor.brush.fg = Color::Ansi(3);
             editor.brush.bg = Color::Rgb(8, 19, 29);
@@ -3954,7 +5493,7 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|clipped| match &clipped.shape {
-                    egui::Shape::Text(shape) if shape.galley.text() == ICON_GRID_VIEW => {
+                    egui::Shape::Text(shape) if shape.galley.text() == ICON_GRID_VIEW.codepoint => {
                         Some(shape.galley.rect.translate(shape.pos.to_vec2()).center())
                     }
                     _ => None,
@@ -3989,7 +5528,8 @@ mod tests {
                 .filter_map(|clipped| match &clipped.shape {
                     egui::Shape::Rect(shape)
                         if clipped.clip_rect == clip
-                            && shape.rect.size() == Vec2::new(24.0, 20.0) =>
+                            && shape.rect.size() == Vec2::new(24.0, 20.0)
+                            && shape.fill.is_opaque() =>
                     {
                         assert!(
                             clip.contains_rect(shape.rect),
@@ -4166,7 +5706,7 @@ mod tests {
         let canvas = editor.doc.canvas.clone();
         let brush = editor.brush;
         let ctx = context();
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let has_text = |output: &egui::FullOutput, text: &str| {
             output.shapes.iter().any(|clipped| {
                 matches!(&clipped.shape, egui::Shape::Text(shape) if shape.galley.text() == text)
@@ -4241,7 +5781,7 @@ mod tests {
             })
             .expect("Placement must remain accessible with a tall text preview");
         assert!(clip.contains_rect(button));
-        assert!(ctx.screen_rect().contains_rect(button));
+        assert!(ctx.content_rect().contains_rect(button));
     }
 
     #[test]
@@ -4284,10 +5824,12 @@ mod tests {
     #[test]
     fn tdf_destination_click_and_typing_do_not_paint_the_canvas() {
         let ctx = context();
-        let mut editor = Editor::default();
-        editor.tdf_open = true;
-        frame(&ctx, &mut editor, vec![]);
-        let pos = Pos2::new(280.0, 40.0);
+        let mut editor = Editor {
+            tdf_open: true,
+            ..Default::default()
+        };
+        let output = frame(&ctx, &mut editor, vec![]);
+        let pos = canvas_cell_center(&output, 1, 0);
         frame(
             &ctx,
             &mut editor,
@@ -4337,13 +5879,18 @@ mod tests {
         assert!(!editor.dirty);
     }
 
-    fn click_text(ctx: &egui::Context, editor: &mut Editor, text: &str) -> egui::FullOutput {
+    fn click_text(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        text: impl Into<String>,
+    ) -> egui::FullOutput {
+        let text = text.into();
         let output = frame(ctx, editor, vec![]);
         let pos = output
             .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(shape) if shape.galley.text() == text => {
+                egui::Shape::Text(shape) if shape.galley.text() == text.as_str() => {
                     Some(shape.galley.rect.translate(shape.pos.to_vec2()).center())
                 }
                 _ => None,
@@ -4533,9 +6080,11 @@ mod tests {
         std::fs::write(&metadata_path, ans_io::save(&doc, Encoding::Cp437).unwrap()).unwrap();
         let plain_path = directory.path().join("plain.ans");
         std::fs::write(&plain_path, b"\x1b[30;1HX").unwrap();
-        let mut editor = Editor::default();
-        editor.width = 120;
-        editor.height = 70;
+        let mut editor = Editor {
+            width: 120,
+            height: 70,
+            ..Default::default()
+        };
         editor
             .history
             .paint(&mut editor.doc.canvas, 0, 0, editor.brush);
@@ -4654,7 +6203,7 @@ mod tests {
         });
         let original = editor.doc.canvas.clone();
         let mut rendered = None;
-        let _ = ctx.run(Default::default(), |ctx| {
+        let _ = crate::run_test_frame(&ctx, Default::default(), |ctx| {
             rendered = Some(editor.rendered_image(ctx).unwrap());
         });
         let selected = rendered.unwrap();
@@ -4669,7 +6218,7 @@ mod tests {
         assert!(editor.dirty);
         assert_eq!(editor.selection.unwrap().bounds(), (3, 2, 4, 3));
         editor.selection = None;
-        let _ = ctx.run(Default::default(), |ctx| {
+        let _ = crate::run_test_frame(&ctx, Default::default(), |ctx| {
             assert_eq!(editor.rendered_image(ctx).unwrap().dimensions(), (720, 400));
         });
         editor.undo();
@@ -4911,8 +6460,10 @@ mod tests {
     #[test]
     fn selection_drag_clamps_whole_region_and_uses_release_position_outside_canvas() {
         let ctx = context();
-        let mut editor = Editor::default();
-        editor.selecting = true;
+        let mut editor = Editor {
+            selecting: true,
+            ..Default::default()
+        };
         editor.doc.canvas = Canvas::new(6, 3).unwrap();
         let cell = Cell {
             ch: 'X',
@@ -4920,8 +6471,8 @@ mod tests {
         };
         editor.doc.canvas.set(1, 0, cell);
         editor.selection = Some(Selection {
-            start: (1, 0),
-            end: (2, 1),
+            start: (2, 1),
+            end: (1, 0),
         });
         let original = editor.doc.canvas.clone();
         let output = frame(&ctx, &mut editor, vec![]);
@@ -4952,6 +6503,12 @@ mod tests {
         );
         assert!(editor.selection_drag.is_none());
         assert_eq!(editor.selection.unwrap().bounds(), (4, 1, 5, 2));
+        let moved = editor.selection.unwrap();
+        assert_eq!(
+            (moved.start, moved.end),
+            ((5, 2), (4, 1)),
+            "moving keeps the selection's drag direction for gradients"
+        );
         assert_eq!(*editor.doc.canvas.get(4, 1).unwrap(), cell);
         assert_eq!(*editor.doc.canvas.get(1, 0).unwrap(), Cell::default());
         editor.undo();
@@ -4969,8 +6526,8 @@ mod tests {
             end: (3, 1),
         });
         let original = editor.doc.canvas.clone();
-        frame(&ctx, &mut editor, vec![]);
-        let start = Pos2::new(285.0, 45.0);
+        let output = frame(&ctx, &mut editor, vec![]);
+        let start = canvas_cell_center(&output, 1, 0);
         frame(
             &ctx,
             &mut editor,
@@ -4983,7 +6540,7 @@ mod tests {
         assert_eq!(editor.selection.unwrap().bounds(), (0, 0, 3, 1));
         assert_eq!(editor.doc.canvas, original);
         frame(&ctx, &mut editor, vec![pointer_button(start, true)]);
-        let end = Pos2::new(305.0, 65.0);
+        let end = canvas_cell_center(&output, 3, 1);
         frame(&ctx, &mut editor, vec![egui::Event::PointerMoved(end)]);
         frame(&ctx, &mut editor, vec![pointer_button(end, false)]);
         assert_eq!(editor.doc.canvas, original);
@@ -4995,8 +6552,8 @@ mod tests {
     fn canvas_click_focuses_typing_and_routes_clipboard_events() {
         let ctx = context();
         let mut editor = Editor::default();
-        frame(&ctx, &mut editor, vec![]);
-        let pos = Pos2::new(280.0, 40.0);
+        let output = frame(&ctx, &mut editor, vec![]);
+        let pos = canvas_cell_center(&output, 1, 0);
         frame(
             &ctx,
             &mut editor,
@@ -5042,8 +6599,10 @@ mod tests {
     #[test]
     fn selection_drag_does_not_paint_and_text_field_takes_focus() {
         let ctx = context();
-        let mut editor = Editor::default();
-        editor.selecting = true;
+        let mut editor = Editor {
+            selecting: true,
+            ..Default::default()
+        };
         let output = frame(&ctx, &mut editor, vec![]);
         let field = output
             .shapes
@@ -5064,8 +6623,8 @@ mod tests {
                 None
             })
             .expect("brush input is visible");
-        let start = Pos2::new(280.0, 40.0);
-        let end = Pos2::new(300.0, 60.0);
+        let start = canvas_cell_center(&output, 1, 0);
+        let end = canvas_cell_center(&output, 3, 1);
         frame(
             &ctx,
             &mut editor,

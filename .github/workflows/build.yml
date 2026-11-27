@@ -45,7 +45,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev \
-            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 \
+            libvulkan1 mesa-vulkan-drivers libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 \
             libxcursor1 libxi6 libxrandr2 xvfb xauth dbus-x11 \
             desktop-file-utils shared-mime-info
       - name: Install Rust
@@ -132,16 +132,24 @@ jobs:
             if grep -q 'not found' dependencies.txt; then exit 1; fi
             mkdir -m 700 "$RUNNER_TEMP/adraw-runtime"
             export XDG_RUNTIME_DIR="$RUNNER_TEMP/adraw-runtime"
-            set +e
-            xvfb-run -a env -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 \
-              timeout --kill-after=5s 15s ./adraw > launch.log 2>&1
-            status=$?
-            set -e
-            cat launch.log
-            if [[ "$status" != 124 ]]; then
-              echo "Expected the editor to stay running; launch status: $status" >&2
+            lavapipe="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)"
+            if [[ -z "$lavapipe" ]]; then
+              echo "Mesa software Vulkan driver not found" >&2
               exit 1
             fi
+            for backend in vulkan gl; do
+              set +e
+              xvfb-run -a env -u WAYLAND_DISPLAY WGPU_BACKEND="$backend" \
+                VK_ICD_FILENAMES="$lavapipe" LIBGL_ALWAYS_SOFTWARE=1 \
+                timeout --kill-after=5s 15s ./adraw > "launch-$backend.log" 2>&1
+              status=$?
+              set -e
+              cat "launch-$backend.log"
+              if [[ "$status" != 124 ]]; then
+                echo "Expected the editor to stay running with $backend; launch status: $status" >&2
+                exit 1
+              fi
+            done
             test -x install.sh && test -s adraw.png
             home="$RUNNER_TEMP/adraw-home"
             entry="$home/.local/share/applications/io.github.mikehodgson.adraw.desktop"

@@ -1,6 +1,9 @@
 use crate::{cell_colors, display_color, glyph, Selection};
 use ansi_core::ans_io::Document;
-use eframe::egui::{epaint::text::Fonts, FontDefinitions};
+use eframe::egui::{
+    epaint::{text::Fonts, FontColorTransferFunction, TextOptions},
+    FontDefinitions,
+};
 use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageFormat, Rgb, RgbImage};
 use std::{collections::BTreeMap, path::Path};
 
@@ -54,7 +57,12 @@ pub fn render(
         .filter(|(w, h)| w.checked_mul(*h).is_some_and(|pixels| pixels <= MAX_PIXELS))
         .ok_or("Rendered image exceeds 32 megapixels. Select a smaller area to export.")?;
     let mut image = RgbImage::new(width as u32, height as u32);
-    let fonts = Fonts::new(1.0, 4096, definitions);
+    let text_options = TextOptions {
+        max_texture_side: 4096,
+        color_transfer_function: FontColorTransferFunction::Gamma(0.55),
+        ..Default::default()
+    };
+    let mut fonts = Fonts::new(text_options, definitions);
     let mut masks = BTreeMap::new();
     let ice = doc
         .sauce
@@ -66,9 +74,9 @@ pub fn render(
             if !masks.contains_key(&cell.ch) {
                 if masks.len() == 256 {
                     masks.clear();
-                    fonts.begin_pass(1.0, 4096);
+                    fonts.begin_pass(text_options, Default::default());
                 }
-                masks.insert(cell.ch, glyph::rasterize(cell.ch, &fonts)?);
+                masks.insert(cell.ch, glyph::rasterize(cell.ch, &mut fonts)?);
             }
             let mask = &masks[&cell.ch];
             let (fg, bg) = cell_colors(cell, ice);

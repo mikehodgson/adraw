@@ -119,7 +119,7 @@ launch-test dependencies can be installed with:
 
 ```sh
 sudo apt-get install build-essential pkg-config libxkbcommon-dev libwayland-dev \
-  libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 \
+  libvulkan1 mesa-vulkan-drivers libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 \
   libxcursor1 libxi6 libxrandr2 xvfb xauth dbus-x11
 cargo test --locked --workspace
 cargo check --locked --workspace
@@ -166,11 +166,11 @@ winit does not forward Finder open requests.
 
 Package checks verify checksums, archive contents, executable permissions,
 macOS architecture/plist/signature, and dynamic dependencies. Linux launches
-the extracted executable under Xvfb with software OpenGL; macOS launches the
-extracted app executable. Both must remain running for 15 seconds. CI also
-runs `install.sh` in a temporary home directory and opens example artwork with
-`open -a ADraw.app`. These
-checks do not replace interactive testing of platform file dialogs, clipboard,
+the extracted executable under Xvfb with Mesa's software Vulkan and OpenGL
+drivers; macOS launches the extracted app executable. Each launch must remain
+running for 15 seconds. CI also runs `install.sh` in a temporary home directory
+and opens example artwork with `open -a ADraw.app`. These checks do not replace
+interactive testing of platform file dialogs, clipboard,
 Wayland, accessibility, or Gatekeeper on downloaded apps.
 CI artifacts are retained for inspection; only version-tag runs publish releases.
 

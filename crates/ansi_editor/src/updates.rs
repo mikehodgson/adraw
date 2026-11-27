@@ -340,7 +340,8 @@ mod tests {
             // Reusing an in-flight startup check must not replace its receiver.
             check.check_now(&ctx);
             let render = |check: &mut UpdateCheck| {
-                ctx.run(
+                crate::run_test_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -350,7 +351,7 @@ mod tests {
                     },
                     |ctx| {
                         check.show(ctx);
-                        egui::Modal::new(egui::Id::new("test-about"))
+                        egui::Modal::new(egui::Id::unique("test-about"))
                             .show(ctx, |ui| check.controls(ui));
                     },
                 )
@@ -393,9 +394,9 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let mut output = ctx.run(input(), |ctx| check.show(ctx));
+            let mut output = crate::run_test_frame(&ctx, input(), |ctx| check.show(ctx));
             for _ in 0..2 {
-                output = ctx.run(input(), |ctx| check.show(ctx));
+                output = crate::run_test_frame(&ctx, input(), |ctx| check.show(ctx));
             }
             assert!(check.receiver.is_none());
             let label = if download {
@@ -424,7 +425,7 @@ mod tests {
                         modifiers: egui::Modifiers::NONE,
                     },
                 ];
-                output = ctx.run(input, |ctx| check.show(ctx));
+                output = crate::run_test_frame(&ctx, input, |ctx| check.show(ctx));
             }
             assert!(check.available.is_none());
             let urls: Vec<_> = output
@@ -444,7 +445,7 @@ mod tests {
                     vec![]
                 }
             );
-            let output = ctx.run(input(), |ctx| check.show(ctx));
+            let output = crate::run_test_frame(&ctx, input(), |ctx| check.show(ctx));
             assert!(output.shapes.is_empty());
         }
         let ctx = egui::Context::default();
@@ -455,10 +456,10 @@ mod tests {
             status: None,
         };
         // A pending or unavailable check must not display a notification.
-        let _ = ctx.run(Default::default(), |ctx| check.show(ctx));
+        let _ = crate::run_test_frame(&ctx, Default::default(), |ctx| check.show(ctx));
         assert!(check.available.is_none());
         sender.send(Ok(None)).unwrap();
-        let _ = ctx.run(Default::default(), |ctx| check.show(ctx));
+        let _ = crate::run_test_frame(&ctx, Default::default(), |ctx| check.show(ctx));
         assert!(check.receiver.is_none());
         assert!(check.available.is_none());
     }
