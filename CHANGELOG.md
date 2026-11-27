@@ -34,6 +34,7 @@ requested.
 - Updated desktop dependencies and refreshed the Rust dependency lockfile.
 - Switched desktop rendering from Glow to wgpu.
 - Removed scroll-edge shading from the main canvas.
+- Ignored the local VS Code workspace file.
 
 ### Fixed
 
