@@ -3,6 +3,9 @@
 ADraw is a desktop editor for ANSI art on Windows, Linux, and macOS. Draw with character brushes,
 type directly on the canvas, and add lettering with TheDraw fonts.
 
+Visit the **[ADraw website](https://adraw.outworldbbs.com/)** for downloads,
+feature highlights, and the illustrated guide.
+
 ![ADraw displaying its application icon as truecolor ANSI artwork](docs/images/adraw-screenshot.jpg)
 
 ## Get started

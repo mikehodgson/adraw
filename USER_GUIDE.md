@@ -1,7 +1,8 @@
 # ADraw user guide
 
 Make ANSI art with character brushes, colors, and TheDraw lettering. For a
-quick start and downloads, see the [README](README.md).
+quick start and downloads, see the [README](README.md) or the
+[ADraw website](https://adraw.outworldbbs.com/).
 
 ![ADraw with the sidebar on the left, artwork in the center, and the minimap on the right](docs/images/adraw-screenshot.jpg)
 

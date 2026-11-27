@@ -9,6 +9,10 @@ requested.
 
 ## [Unreleased]
 
+### Added
+
+- Linked the README and user guide to the ADraw website.
+
 ## [0.5.0] - 2026-11-27
 
 ### Added
