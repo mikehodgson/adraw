@@ -45,8 +45,8 @@ Run from the project root in PowerShell:
 $compiler = .\packaging\Get-InnoSetup.ps1 -Destination "$PWD\target\tools\innosetup"
 .\packaging\Build-Release.ps1 -InnoCompiler $compiler
 .\packaging\Test-Installer.ps1 `
-  -Installer "$PWD\target\dist\adraw-0.5.0-windows-x64-setup.exe" `
-  -PortableZip "$PWD\target\dist\adraw-0.5.0-windows-x64.zip"
+  -Installer "$PWD\target\dist\adraw-0.5.1-windows-x64-setup.exe" `
+  -PortableZip "$PWD\target\dist\adraw-0.5.1-windows-x64.zip"
 ```
 
 The compiler helper downloads pinned Inno Setup 6.7.4, verifies its SHA-256
@@ -99,11 +99,11 @@ to refresh and check the lockfile, and commit the changes to `main`. Then:
 ```powershell
 gh auth setup-git
 git push origin main
-git tag -a v0.5.0 -m "ADraw 0.5.0"
-git push origin v0.5.0
+git tag -a v0.5.1 -m "ADraw 0.5.1"
+git push origin v0.5.1
 ```
 
-Use the new version in place of `0.5.0`. The
+Use the new version in place of `0.5.1`. The
 [release workflow](.github/workflows/release.yml) runs for pushed version tags
 with or without the `v` prefix, including prerelease tags. The tag must match
 the Cargo version, or packaging fails rather than publishing a mislabeled
