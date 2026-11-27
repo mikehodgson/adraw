@@ -27,10 +27,11 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=no
 RestartApplications=no
+ChangesAssociations=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
-Name: "contextmenu"; Description: "Add ""Open with ADraw"" to the context menu for .ans and .asc files"
+Name: "contextmenu"; Description: "Add ADraw to ""Open with"" and the context menu for .ans and .asc files"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -43,6 +44,18 @@ Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.ans\shell\ADraw\com
 Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.asc\shell\ADraw"; ValueType: string; ValueName: ""; ValueData: "Open with ADraw"; Flags: uninsdeletekey; Tasks: contextmenu
 Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.asc\shell\ADraw"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\adraw.exe,0"; Tasks: contextmenu
 Root: HKA; Subkey: "Software\Classes\SystemFileAssociations\.asc\shell\ADraw\command"; ValueType: string; ValueName: ""; ValueData: """{app}\adraw.exe"" -- ""%1"""; Tasks: contextmenu
+; "Open with" choices: a ProgID listed in OpenWithProgids plus the application registration.
+Root: HKA; Subkey: "Software\Classes\ADraw.AnsiArt"; ValueType: string; ValueName: ""; ValueData: "ANSI artwork"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\ADraw.AnsiArt"; ValueType: string; ValueName: "FriendlyTypeName"; ValueData: "ANSI artwork"; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\ADraw.AnsiArt\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\adraw.exe,0"; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\ADraw.AnsiArt\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\adraw.exe"" -- ""%1"""; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\.ans\OpenWithProgids"; ValueType: string; ValueName: "ADraw.AnsiArt"; ValueData: ""; Flags: uninsdeletevalue; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\.asc\OpenWithProgids"; ValueType: string; ValueName: "ADraw.AnsiArt"; ValueData: ""; Flags: uninsdeletevalue; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\Applications\adraw.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "ADraw"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\Applications\adraw.exe\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\adraw.exe,0"; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\Applications\adraw.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\adraw.exe"" -- ""%1"""; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\Applications\adraw.exe\SupportedTypes"; ValueType: string; ValueName: ".ans"; ValueData: ""; Tasks: contextmenu
+Root: HKA; Subkey: "Software\Classes\Applications\adraw.exe\SupportedTypes"; ValueType: string; ValueName: ".asc"; ValueData: ""; Tasks: contextmenu
 
 [Icons]
 Name: "{autoprograms}\ADraw"; Filename: "{app}\adraw.exe"

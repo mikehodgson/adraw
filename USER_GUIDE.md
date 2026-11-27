@@ -190,9 +190,10 @@ scripts use `Start-Process adraw -ArgumentList '--png','my-screen.ans' -Wait`.
 ADraw can be offered for `.ans` and `.asc` files without replacing your default
 application:
 
-- **Windows:** The installer offers **Open with ADraw** in Explorer's context
-  menu (enabled by default). On Windows 11, first choose **Show more options**.
-  Uninstall removes it; the portable ZIP doesn't register it.
+- **Windows:** The installer adds ADraw to Explorer's **Open with** menu and
+  adds an **Open with ADraw** context-menu entry (enabled by default; on
+  Windows 11, the entry is under **Show more options**). Uninstall removes
+  both; the portable ZIP doesn't register them.
 - **Linux:** Run `./install.sh` from the extracted directory to install for
   your user and add an **Open With** choice. Add `~/.local/bin` to `PATH` for
   terminal use. Run `./install.sh --uninstall` to remove it.

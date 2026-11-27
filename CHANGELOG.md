@@ -13,6 +13,12 @@ requested.
 
 - Linked the README and user guide to the ADraw website.
 
+### Fixed
+
+- The Windows installer now lists ADraw in Explorer's **Open with** menu for
+  `.ans` and `.asc` files, in addition to the **Open with ADraw** context-menu
+  entry.
+
 ## [0.5.0] - 2026-11-27
 
 ### Added

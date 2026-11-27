@@ -57,9 +57,11 @@ under `target\dist`. No runtime build tools are required by users.
 
 The installer's optional `contextmenu` task registers per-user
 `Software\Classes\SystemFileAssociations\.ans` and `.asc` `shell\ADraw`
-verbs that run `adraw.exe -- "%1"`; `Test-Installer.ps1` checks they are
-created and removed. Do not run `Test-Installer.ps1` on a machine where ADraw
-is already installed.
+verbs, an `ADraw.AnsiArt` ProgID listed in each extension's
+`OpenWithProgids`, and `Applications\adraw.exe` with `SupportedTypes`. All
+run `adraw.exe -- "%1"` and leave default programs unchanged;
+`Test-Installer.ps1` checks they are created and removed. Do not run
+`Test-Installer.ps1` on a machine where ADraw is already installed.
 
 The workspace release profile favors executable size (`opt-level = "z"`),
 uses ThinLTO and one codegen unit, and strips symbols. These settings apply
