@@ -42,7 +42,7 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $stage 'LICENSE.txt')
     Copy-Item -LiteralPath (Join-Path $root 'crates\ansi_editor\assets\LICENSE-IBM-VGA.txt') -Destination $stage
-    foreach ($asset in @('docs\images\adraw-screenshot.jpg', 'examples\adraw-icon.ans')) {
+    foreach ($asset in @('docs\images\adraw-screenshot.jpg', 'docs\images\gradient-direction.svg', 'docs\images\brush-tools.png', 'docs\images\colors-gradient.png', 'docs\images\minimap.png', 'examples\adraw-icon.ans')) {
         $destination = Join-Path $stage $asset
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $root $asset) -Destination $destination

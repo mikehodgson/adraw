@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="254" viewBox="0 0 760 254" role="img" aria-labelledby="title description">
+  <title id="title">Gradient direction and reversal</title>
+  <desc id="description">An example horizontal RGB gradient runs from blue on the left to purple on the right. Reversing it puts purple on the left and blue on the right.</desc>
+  <defs>
+    <linearGradient id="forward"><stop stop-color="#1673d1"/><stop offset="1" stop-color="#a437bc"/></linearGradient>
+    <linearGradient id="reverse"><stop stop-color="#a437bc"/><stop offset="1" stop-color="#1673d1"/></linearGradient>
+  </defs>
+  <rect width="760" height="254" rx="12" fill="#f3f5f8"/>
+  <g font-family="Arial, sans-serif" fill="#182235">
+    <text x="24" y="34" font-size="20" font-weight="bold">Gradient direction: horizontal illustration</text>
+    <text x="24" y="65" font-size="15">RGB start: blue</text>
+    <text x="254" y="65" font-size="15">RGB end: purple</text>
+    <text x="24" y="96" font-size="16" font-weight="bold">Left to right</text>
+    <text x="24" y="184" font-size="16" font-weight="bold">Reversed</text>
+    <text x="500" y="124" font-size="15">Start → end</text>
+    <text x="500" y="212" font-size="15">End ← start</text>
+  </g>
+  <rect x="24" y="108" width="450" height="34" rx="3" fill="url(#forward)"/>
+  <rect x="24" y="196" width="450" height="34" rx="3" fill="url(#reverse)"/>
+  <path d="M24 153h450 M474 153l-8 -5 M474 153l-8 5 M474 241H24 M24 241l8 -5 M24 241l8 5" fill="none" stroke="#283c59" stroke-width="2"/>
+</svg>

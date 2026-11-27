@@ -35,6 +35,7 @@ cp README.md USER_GUIDE.md CHANGELOG.md NOTICE.txt "$payload/"
 cp LICENSE "$payload/LICENSE.txt"
 cp crates/ansi_editor/assets/LICENSE-IBM-VGA.txt "$payload/"
 cp docs/images/adraw-screenshot.jpg "$payload/docs/images/"
+cp docs/images/gradient-direction.svg docs/images/brush-tools.png docs/images/colors-gradient.png docs/images/minimap.png "$payload/docs/images/"
 cp examples/adraw-icon.ans "$payload/examples/"
 
 if [[ "$platform" == macos-* ]]; then

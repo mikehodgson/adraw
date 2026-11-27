@@ -1276,8 +1276,8 @@ struct ColorEvents {
     /// The open RGB picker's target, or `None` when it is closed.
     rgb: Option<RgbTarget>,
     /// A color clicked in a palette for the brush, even if it was already
-    /// the current color.
-    picked: Option<Color>,
+    /// the current color: `(background, color)`.
+    picked: Option<(bool, Color)>,
 }
 
 fn gradient_modifier(ctx: &egui::Context) -> &'static str {
@@ -1295,7 +1295,7 @@ fn palette_button(
     foreground: &mut Color,
     background: &mut Color,
     gradient: &mut Option<GradientPick>,
-    picked: &mut Option<Color>,
+    picked: &mut Option<(bool, Color)>,
 ) -> egui::Response {
     let selected = display_color(*foreground) == display_color(color)
         || display_color(*background) == display_color(color);
@@ -1328,7 +1328,7 @@ fn palette_button(
                 end: color,
             });
         } else {
-            *picked = Some(color);
+            *picked = Some((is_background, color));
             if is_background {
                 *background = color;
             } else {
@@ -1349,7 +1349,7 @@ fn used_palette(
     foreground: &mut Color,
     background: &mut Color,
     gradient: &mut Option<GradientPick>,
-    picked: &mut Option<Color>,
+    picked: &mut Option<(bool, Color)>,
 ) {
     ui.push_id("artwork_palette", |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -1729,11 +1729,14 @@ impl Editor {
                 let events =
                     color_controls(ui, &mut self.brush.fg, &mut self.brush.bg, used_colors);
                 self.rgb_open = events.rgb.is_some();
-                if let Some(color) = events.picked {
+                if let Some((_, color)) = events.picked {
                     self.remember_color(color);
                 }
-                let fg = (self.brush.fg != before.0).then_some(self.brush.fg);
-                let bg = (self.brush.bg != before.1).then_some(self.brush.bg);
+                // A palette click recolors the selection even when the brush
+                // already has that color.
+                let picked = |background| events.picked.is_some_and(|(b, _)| b == background);
+                let fg = (self.brush.fg != before.0 || picked(false)).then_some(self.brush.fg);
+                let bg = (self.brush.bg != before.1 || picked(true)).then_some(self.brush.bg);
                 if events.rgb.is_none() {
                     self.recolor_merge = None;
                 }
@@ -2530,6 +2533,28 @@ impl Editor {
                             }
                             Err(error) => self.message = Some(error),
                         }
+                    }
+                    // Arrow keys move the canvas cursor. Cancel egui's arrow-key
+                    // focus navigation so focus doesn't jump to sidebar widgets.
+                    if response.has_focus()
+                        && ctx.input(|input| {
+                            input.events.iter().any(|event| {
+                                matches!(
+                                    event,
+                                    egui::Event::Key {
+                                        key: egui::Key::ArrowLeft
+                                            | egui::Key::ArrowRight
+                                            | egui::Key::ArrowUp
+                                            | egui::Key::ArrowDown,
+                                        pressed: true,
+                                        modifiers,
+                                        ..
+                                    } if !modifiers.any()
+                                )
+                            })
+                        })
+                    {
+                        ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
                     }
                     let focused = response.has_focus()
                         && !self.about_open
@@ -5111,9 +5136,18 @@ mod tests {
 
     #[test]
     fn palette_colors_recolor_the_active_selection_as_one_undo_step() {
-        for background in [false, true] {
+        for (background, already_current) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let ctx = context();
             let mut editor = Editor::default();
+            if already_current {
+                if background {
+                    editor.brush.bg = Color::Ansi(12);
+                } else {
+                    editor.brush.fg = Color::Ansi(12);
+                }
+            }
             let cell = Cell {
                 ch: 'A',
                 fg: Color::Ansi(3),
@@ -6594,6 +6628,42 @@ mod tests {
         frame(&ctx, &mut editor, vec![egui::Event::Paste("AB".into())]);
         assert_eq!(editor.doc.canvas.get(5, 1).unwrap().ch, 'A');
         assert_eq!(editor.doc.canvas.get(6, 1).unwrap().ch, 'B');
+    }
+
+    #[test]
+    fn arrow_keys_keep_focus_on_canvas() {
+        let ctx = context();
+        let mut editor = Editor::default();
+        let output = frame(&ctx, &mut editor, vec![]);
+        let pos = canvas_cell_center(&output, 3, 2);
+        frame(
+            &ctx,
+            &mut editor,
+            vec![egui::Event::PointerMoved(pos), pointer_button(pos, true)],
+        );
+        frame(&ctx, &mut editor, vec![pointer_button(pos, false)]);
+        assert_eq!(editor.cursor, (3, 2));
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for k in [
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowUp,
+            egui::Key::ArrowRight,
+            egui::Key::ArrowDown,
+            egui::Key::ArrowDown,
+        ] {
+            frame(&ctx, &mut editor, vec![key(k)]);
+            frame(&ctx, &mut editor, vec![]);
+        }
+        assert_eq!(editor.cursor, (2, 3));
+        frame(&ctx, &mut editor, vec![egui::Event::Text("Z".into())]);
+        assert_eq!(editor.doc.canvas.get(2, 3).unwrap().ch, 'Z');
     }
 
     #[test]

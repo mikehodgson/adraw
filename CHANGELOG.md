@@ -29,19 +29,23 @@ requested.
 
 ### Changed
 
+- Streamlined the user guide, refreshed the application screenshot, and
+  illustrated the brush tools, gradient controls, and minimap.
 - Used colors lists only the colors you pick during the session, including
   gradient end colors, instead of every color in the artwork.
 - Updated desktop dependencies and refreshed the Rust dependency lockfile.
 - Switched desktop rendering from Glow to wgpu.
 - Removed scroll-edge shading from the main canvas.
 - Ignored the local VS Code workspace file.
+- Saved ANSI files separate rows with plain line breaks instead of cursor
+  positioning escape codes; only color and attribute codes are written.
 
 ### Fixed
 
-- Resizing the minimap reuses its cached preview instead of rebuilding it
-  on every width change.
-- Drawing with the minimap visible refreshes only the changed preview region,
-  avoiding a full preview redraw for every painted cell.
+- Arrow keys keep moving the canvas cursor instead of shifting keyboard focus
+  to sidebar controls and hiding the cursor.
+- Clicking a palette color with a selection active recolors the selection even
+  when that color is already the current foreground or background.
 
 ## [0.4.0] - 2026-11-26
 

@@ -347,7 +347,10 @@ pub fn save(document: &Document, encoding: Encoding) -> Result<Vec<u8>, String> 
     let mut out = Vec::new();
     let mut style = None;
     for y in 0..canvas.height() {
-        out.extend_from_slice(format!("\x1b[{};1H", y + 1).as_bytes());
+        // Plain line breaks only: no cursor positioning sequences.
+        if y > 0 {
+            out.extend_from_slice(b"\r\n");
+        }
         for x in 0..canvas.width() {
             let cell = canvas.get(x, y).unwrap();
             let key = (cell.fg, cell.bg, cell.attrs);
@@ -489,6 +492,49 @@ mod tests {
         let bytes = save(&doc, Encoding::Cp437).unwrap();
         let loaded = load(&bytes, Encoding::Cp437, 80, 25).unwrap();
         assert_eq!(doc.canvas, loaded.canvas);
+    }
+
+    #[test]
+    fn save_separates_rows_with_line_breaks_not_cursor_movement() {
+        let mut canvas = Canvas::new(3, 3).unwrap();
+        for (y, row) in ["ABC", "D  ", "EFG"].into_iter().enumerate() {
+            for (x, ch) in row.chars().enumerate() {
+                canvas.set(
+                    x,
+                    y,
+                    Cell {
+                        ch,
+                        ..Cell::default()
+                    },
+                );
+            }
+        }
+        let doc = Document {
+            canvas,
+            sauce: Some(Sauce::default()),
+        };
+        let bytes = save(&doc, Encoding::Cp437).unwrap();
+        let (art, _) = sauce::parse(&bytes).unwrap();
+        let mut i = 0;
+        while let Some(offset) = art[i..].iter().position(|&b| b == 0x1b) {
+            let start = i + offset;
+            let end = start + art[start..].iter().position(|&b| b == b'm').unwrap();
+            assert!(
+                art[start + 2..end]
+                    .iter()
+                    .all(|b| b.is_ascii_digit() || *b == b';'),
+                "only SGR color sequences are written"
+            );
+            i = end + 1;
+        }
+        let text: Vec<u8> = art
+            .split(|&b| b == 0x1b)
+            .flat_map(|part| &part[part.iter().position(|&b| b == b'm').map_or(0, |p| p + 1)..])
+            .copied()
+            .collect();
+        assert_eq!(text, b"ABC\r\nD  \r\nEFG");
+        let loaded = load_auto(&bytes, Encoding::Cp437).unwrap();
+        assert_eq!(loaded.canvas, doc.canvas);
     }
     #[test]
     fn movement_wrapping_utf8_and_bad_input() {

@@ -30,7 +30,7 @@ try {
     if ($process.ExitCode -ne 0 -or -not $installed) {
         throw "Installer smoke test failed (exit $($process.ExitCode))."
     }
-    foreach ($file in @('adraw.exe', 'README.md', 'USER_GUIDE.md', 'CHANGELOG.md', 'NOTICE.txt', 'LICENSE.txt', 'LICENSE-IBM-VGA.txt', 'docs\images\adraw-screenshot.jpg', 'examples\adraw-icon.ans')) {
+    foreach ($file in @('adraw.exe', 'README.md', 'USER_GUIDE.md', 'CHANGELOG.md', 'NOTICE.txt', 'LICENSE.txt', 'LICENSE-IBM-VGA.txt', 'docs\images\adraw-screenshot.jpg', 'docs\images\gradient-direction.svg', 'docs\images\brush-tools.png', 'docs\images\colors-gradient.png', 'docs\images\minimap.png', 'examples\adraw-icon.ans')) {
         $copied = Get-FileHash -LiteralPath (Join-Path $installDirectory $file) -Algorithm SHA256
         $portable = Get-FileHash -LiteralPath (Join-Path $portableDirectory $file) -Algorithm SHA256
         if ($copied.Hash -ne $portable.Hash) { throw "Installer payload differs from ZIP: $file" }

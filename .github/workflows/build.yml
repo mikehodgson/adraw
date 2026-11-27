@@ -103,6 +103,7 @@ jobs:
           test -s README.md && test -s USER_GUIDE.md && test -s CHANGELOG.md
           test -s LICENSE.txt && test -s LICENSE-IBM-VGA.txt && test -s NOTICE.txt
           test -s docs/images/adraw-screenshot.jpg && test -s examples/adraw-icon.ans
+          for image in gradient-direction.svg brush-tools.png colors-gradient.png minimap.png; do test -s "docs/images/$image"; done
           if [[ "$RUNNER_OS" == macOS ]]; then
             plutil -lint ADraw.app/Contents/Info.plist
             test -s ADraw.app/Contents/Resources/adraw.icns

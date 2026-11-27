@@ -1,366 +1,257 @@
 # ADraw user guide
 
-This guide explains ADraw's editing tools and file workflows. For installation
-and a quick start, see the [README](README.md).
+Make ANSI art with character brushes, colors, and TheDraw lettering. For a
+quick start and downloads, see the [README](README.md).
 
-The Windows installer installs for your current user, normally in
-`%LOCALAPPDATA%\Programs\ADraw`, and adds a Start menu shortcut. A desktop
-shortcut is optional. Close ADraw before installing an update.
-Uninstall through **Windows Settings > Apps**; uninstall and upgrades leave
-your saved artwork, preferences, and imported fonts intact.
-The portable ZIP requires no installation; extract it and run `adraw.exe`.
-Both distributions include the display font, documentation, and license notices.
-Windows also needs a DirectX 12, Vulkan, or OpenGL 3.3-capable graphics driver.
+![ADraw with the sidebar on the left, artwork in the center, and the minimap on the right](docs/images/adraw-screenshot.jpg)
 
-Linux and macOS packages are available from 0.3.0:
+On macOS, use **Command** wherever this guide says **Ctrl**. Redo is
+**Command+Shift+Z** (Command+Y also works). Hover over sidebar icons for their
+names and shortcuts.
 
-- **Linux:** choose `linux-x64` or `linux-arm64`, extract the `.tar.gz`,
-  and run `./adraw` from the extracted directory. Use Ubuntu 22.04 or a
-  compatible newer desktop with glibc 2.35+, X11 or Wayland, and a Vulkan
-  or OpenGL-capable graphics driver (OpenGL 3.3 or OpenGL ES 3.0 or newer).
-  File dialogs use `libdbus-1`, a running D-Bus session, and
-  `xdg-desktop-portal` with a desktop backend (such as
-  `xdg-desktop-portal-gtk` or the KDE equivalent). Install `zenity` as a
-  fallback when the portal is unavailable.
-  On Ubuntu, install missing runtime packages with
-  `sudo apt install libvulkan1 mesa-vulkan-drivers libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libxcursor1 libxi6 libxrandr2 libdbus-1-3 xdg-desktop-portal xdg-desktop-portal-gtk zenity`.
-  These are not static binaries or AppImages.
-- **macOS:** choose `macos-arm64` for Apple Silicon or `macos-x64` for Intel,
-  extract the `.tar.gz`, and move `ADraw.app` to Applications.
-  macOS 11 or newer and a Metal-capable graphics device are required. Apps
-  have an ad-hoc signature, not a Developer ID signature or Apple notarization.
-  After attempting to open a
-  trusted official download, use **System Settings > Privacy & Security >
-  Open Anyway** if macOS blocks it. Do not disable Gatekeeper globally.
+**Jump to:** [Setup](#get-set-up) · [Drawing](#create-draw-and-type) ·
+[Colors and gradients](#colors-and-attributes) · [Selections](#select-move-and-paste) ·
+[Files and export](#open-save-and-export) · [SAUCE](#sauce-credits) ·
+[Workspace](#zoom-minimap-and-sidebar) · [TheDraw fonts](#lettering-with-thedraw-fonts)
 
-On macOS, use **Command** instead of **Ctrl** for the shortcuts below.
-Redo is **Command+Shift+Z** (**Command+Y** is also supported).
-The menus and tooltips show your platform's shortcut keys.
-The bundled CP437 font works on every platform; other Unicode glyphs use
-the available fallback fonts and can differ between systems.
+## Get set up
 
-At startup, ADraw checks the official GitHub releases in the background.
-If a newer stable version is available, choose **Download update** to open
-the release page in your browser, or **Not now** (or close the notification)
-to keep editing. Dismissal lasts until the next launch. No update is downloaded
-or installed automatically. Offline, timed-out, or inaccessible checks do not
-show an error or prevent you from using ADraw.
+- **Windows:** Run the installer, or extract the portable ZIP and run
+  `adraw.exe`. The installer normally uses `%LOCALAPPDATA%\Programs\ADraw`,
+  adds a Start menu shortcut, and offers an optional desktop shortcut.
+  Close ADraw before updating. Uninstall through **Windows Settings > Apps**;
+  upgrades and uninstall leave your artwork, preferences, and imported fonts
+  intact. A DirectX 12, Vulkan, or OpenGL 3.3-capable graphics driver is
+  required.
+- **Linux:** Extract the `linux-x64` or `linux-arm64` archive and run `./adraw`.
+  You need Ubuntu 22.04 or a compatible newer desktop, glibc 2.35+, X11 or
+  Wayland, and a Vulkan or OpenGL-capable driver (OpenGL 3.3 or OpenGL ES 3.0
+  or newer). These packages are not static binaries or AppImages.
+- **macOS:** Extract `macos-arm64` for Apple Silicon or `macos-x64` for Intel,
+  then move `ADraw.app` to Applications. macOS 11+ and a Metal-capable device
+  are required. The app is ad-hoc signed, not Developer ID signed or
+  notarized. If macOS blocks a trusted official download after you try to open
+  it, use **System Settings > Privacy & Security > Open Anyway**. Do not
+  disable Gatekeeper globally.
 
-Choose **About** in the top menu to see the application logo, current version,
-and a link to the GitHub repository. **Check for updates** runs the same
-background check on demand and reports whether a newer release is available,
-you are up to date, or the check is unavailable. If a check is already running,
-wait for it to finish before trying again. A download link opens the official
-release page; nothing is installed automatically. About uses the same movable,
-resizable, collapsible window as the other tools. Close it with its title-bar
-**X**; clicking outside does not dismiss it.
+Linux file dialogs need `libdbus-1`, a running D-Bus session, and
+`xdg-desktop-portal` with a desktop backend. Install `zenity` as a fallback.
+On Ubuntu, install missing runtime packages with:
 
-## Contents
+```sh
+sudo apt install libvulkan1 mesa-vulkan-drivers libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libxcursor1 libxi6 libxrandr2 libdbus-1-3 xdg-desktop-portal xdg-desktop-portal-gtk zenity
+```
 
-- [Create and resize images](#create-and-resize-images)
-- [Draw and type](#draw-and-type)
-- [Colors and attributes](#colors-and-attributes)
-- [Selections and clipboard](#selections-and-clipboard)
-- [Open and save artwork](#open-and-save-artwork)
-- [SAUCE artwork credits](#sauce-artwork-credits)
-- [Zoom and scrolling](#zoom-and-scrolling)
-- [Arrange the sidebar](#arrange-the-sidebar)
-- [Lettering with TheDraw fonts](#lettering-with-thedraw-fonts)
-- [Encoding and compatibility](#encoding-and-compatibility)
+ADraw checks official GitHub releases at startup. **Download update** opens the
+release page; nothing is downloaded or installed automatically. Dismiss the
+notice to keep editing; it may return next launch. Offline checks don't interrupt
+your work. Use **About > Check for updates** to check manually and see the
+result; if a check is running, wait for it to finish.
 
-## Create and resize images
+## Create, draw, and type
 
-Choose **File > New image** for the default **80 x 25** canvas.
-New images always reset to these defaults, regardless of the previous image.
-For a custom size, create a new image, then set **Width** and **Height** in the
-**Canvas** menu and choose **Resize canvas**.
+**File > New image** starts an 80 × 25 canvas. To change its size, set **Width**
+and **Height** in the **Canvas** menu and choose **Resize canvas**. Resizing is
+undoable. Large or zoomed images scroll without changing their saved size.
 
-To resize an existing image, set the new dimensions in **Canvas**, then choose
-**Resize canvas**. Use **Edit > Undo** or **Ctrl+Z** to undo a resize.
+![Brush tools: Draw, Select, Eyedropper, Copy, Cut, brush character, and CP437 character picker](docs/images/brush-tools.png)
 
-The startup window fits the default canvas and sidebar. You can resize the
-window; it also fits an 80-column canvas with the minimap open. Larger or
-zoomed artwork scrolls rather than changing the image size.
+The **Brush** tools are, from left: Draw, Select, Eyedropper, Copy, Cut, the
+brush character, and the CP437 character picker.
 
-## Draw and type
-
-Choose a character in the brush input or open the **CP437 character picker**
-beside it. CP437 characters use the bundled **IBM VGA 9x16** font; no font
-installation is needed.
-
-Choose **Draw** in the sidebar, then click or drag on the canvas to paint.
-Choose **Eyedropper** (also in the **Edit** menu) to pick up colors from the
-artwork: **left-click** a cell to use its foreground color, **right-click** to
-use its background color. The picked color is the one shown on screen, so
-bold or blinking text and inverse cells give their displayed colors. The
-artwork does not change.
-To type directly, click a cell and enter text. Typed characters use your brush
-colors and attributes.
+Choose a character in the brush field or the **CP437 character picker**. In
+**Draw** mode, click or drag to paint; click a cell and type to enter text using
+the current brush colors and attributes.
 
 | Key | Action |
 | --- | --- |
-| Arrow keys | Move the cursor. |
-| Enter | Start another row. |
-| Backspace / Delete | Erase characters. |
-| Ctrl+Z / Ctrl+Y | Undo / redo. |
+| Arrows | Move the cursor |
+| Enter | Start another row |
+| Backspace / Delete | Erase characters |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
 
-Hover sidebar icons to see their labels and keyboard shortcuts.
+Choose **Eyedropper** in the sidebar or **Edit** menu to pick a displayed
+color: left-click a cell for foreground, right-click for background. It picks
+what you see, including the effect of bold, blink, and inverse, without
+changing the artwork.
 
 ## Colors and attributes
 
-All palettes are shared: **left-click** a color to set foreground,
-**right-click** to set background. The **FG** and **BG** swatches show the
-current brush colors.
+Left-click a swatch for foreground; right-click for background. Use the inline
+16-color palette, the **256-color** button, or the RGB button/current-color
+swatches for truecolor. Opening an RGB picker alone doesn't change the color.
 
-- **16 colors:** choose from the inline palette.
-- **256 colors:** open the indexed palette with the 256-color button, then
-  left/right-click a swatch for foreground/background.
-- **Truecolor:** left/right-click the RGB button or either current-color
-  swatch to open the foreground/background RGB picker. Opening a picker does
-  not change the selected color until you choose another.
+**Used colors** remembers colors you pick during this session, not every color
+in the artwork. RGB picks appear when the picker closes; gradient endpoints
+are included. The list clears when ADraw closes.
 
-The **Used colors** palette below the 16-color swatches lists the colors you
-have picked this session, in the order you first picked them: palette and
-eyedropper picks, RGB picker colors (added when the picker closes), and
-gradient end colors. Colors in your artwork are not listed unless you pick
-them. Reuse them with the same left/right-click controls. The list is cleared
-when ADraw closes. Large color sets can be scrolled.
+With a selection active, choosing a color also recolors that foreground or
+background throughout the selection without changing its characters,
+attributes, or other color. Each choice, including an RGB adjustment, is one
+undo step.
 
-With an active selection, choosing a foreground or background color from any
-palette or the RGB picker also recolors every cell in the selection, keeping
-its characters, attributes, and the other color. Each choice is one undo step;
-adjusting the RGB picker continuously also undoes in one step.
+The **Attributes** buttons set bold, blink/iCE, underline, and inverse. Blink
+is saved but not animated in the editor.
 
-### Color gradients
+### Make a gradient
 
-Hold **Ctrl** (**Cmd** on macOS) while clicking a color to fade the
-selection's colors instead of filling them:
+1. Pick a foreground or background start color.
+2. Select an area, dragging from the desired start toward the end.
+3. Hold **Ctrl** and left-click an end color for a foreground gradient, or
+   right-click for a background gradient. This works in all palettes. To use
+   RGB, Ctrl+click the RGB button or current-color swatch; in an already-open
+   picker, hold Ctrl while choosing the end color.
 
-1. Set the start color as your normal foreground or background.
-2. Select an area by dragging from where the gradient should start to where
-   it should end.
-3. **Ctrl+left-click** a color to fade the foreground, or **Ctrl+right-click**
-   to fade the background, from the current color to the clicked one. This
-   works in every palette. **Ctrl+click** the RGB button or a current-color
-   swatch to choose the end color with the RGB picker; the selection updates
-   as you adjust it. In an RGB picker that is already open, hold **Ctrl**
-   while clicking or dragging to switch it to choosing the end color.
+![Colors section with a selection active, showing the Gradient controls: follow drag, horizontal, vertical, and reverse](docs/images/colors-gradient.png)
 
-Your brush colors do not change, so you can Ctrl+click other end colors to
-compare. The gradient follows the direction you dragged: the cell where you
-started the selection gets the start color, the cell where you released gets
-the end color, and each cell in between gets the color for its position along
-that line. Drag left to right for a horizontal gradient, top to bottom for a
-vertical one, or corner to corner for a diagonal one. Moving the selection
-keeps its direction; **Select all** runs from the top-left to the bottom-right.
+The brush color stays unchanged, so you can try other endpoints. The gradient
+normally follows the selection drag, including diagonals. **Select all** runs
+from top-left to bottom-right. Use the **Gradient** controls under the colors
+to follow the drag, run horizontally or vertically, or reverse the direction.
+If the selection and artwork haven't changed since the latest gradient,
+changing these controls redraws it in place.
 
-While a selection is active, the **Gradient** row under the colors sets the
-direction: follow the selection drag, left to right, or top to bottom. The
-reverse button swaps which end gets the start color. Changing these redraws
-the selection's latest gradient in place, still as a single undo step, and
-applies to later gradients too.
+![Diagram: reversing a horizontal RGB gradient swaps its start and end positions](docs/images/gradient-direction.svg)
 
-The gradient uses the richest palette of its two colors: two 16-color
-endpoints give a 16-color gradient, a 256-color endpoint gives nearest
-256-color steps, and an RGB endpoint gives smooth truecolor. Characters,
-attributes, and the other color are kept. Each gradient is one undo step.
+Two 16-color endpoints produce 16-color steps; a 256-color endpoint uses
+nearest 256-color steps, and an RGB endpoint produces truecolor. The other
+color, characters, and attributes stay intact. Each gradient is one undo step.
 
-Use the **Attributes** buttons to change bold, blink/iCE, underline, or inverse
-colors. Blink attributes are saved but are not animated in the editor.
+## Select, move, and paste
 
-## Selections and clipboard
+Choose **Selection > Rectangular selection** and drag. Use **Select all** or
+**Deselect** in the same menu.
 
 | Task | How |
 | --- | --- |
-| Select an area | Choose **Selection > Rectangular selection**, then drag a rectangle. |
-| Select everything / clear selection | **Selection > Select all / Deselect**. |
-| Copy / cut | Select an area, then **Ctrl+C / Ctrl+X**, or use the **Edit** menu. |
-| Paste | In Select mode, click the destination, then **Ctrl+V**. Deselect first if the destination is inside the existing selection. |
-| Move an area | Drag inside the selection; release to complete the move. |
-| Undo / redo | **Ctrl+Z / Ctrl+Y**, or the **Edit** menu. |
+| Copy / cut | Select an area, then press **Ctrl+C / Ctrl+X** |
+| Paste | In Select mode, click the destination and press **Ctrl+V**. If it is inside the existing selection, deselect first. |
+| Move | Drag inside the selection and release |
 
-Copies within the editor preserve characters, colors, and attributes. Pasted
-external text uses the brush style. Pasted areas must fit within the canvas.
+Copies within ADraw preserve characters, colors, and attributes; external text
+uses the brush style. Pasted areas must fit on the canvas. Moving clears the
+original area and overwrites the destination, including blank cells. Moves,
+cuts, and pastes are undoable.
 
-Moving a selection clears its original area and overwrites the destination,
-including blank cells. Moves, cuts, and pastes can each be undone as one action.
+## Open, save, and export
 
-## Open and save artwork
+Choose **File > Encoding** before opening or saving: **CP437** for classic
+ANSI/BBS art, or **UTF-8** for Unicode. The intended viewer must support the
+encoding and colors you use. Some graphical CP437 control characters cannot
+be saved safely in CP437 ANSI; choose UTF-8 if ADraw reports this. The bundled
+IBM VGA 9x16 font displays CP437; other Unicode glyphs use system fallback
+fonts and may look different across systems.
 
-Choose **File > Open...** to load an `.ans` file. Opening replaces the canvas
-dimensions and the **Canvas** menu's Width and Height with those of the file.
-SAUCE dimensions take precedence. If width is missing, ADraw assumes **80**
-columns; if height is missing, it is inferred from the artwork's rendered rows.
-The previous image's dimensions are never used. Trailing line breaks do not
-add empty rows, and an empty file opens as an 80 x 1 canvas.
+**File > Open...** loads `.ans` or `.asc` artwork. The file's SAUCE dimensions
+take precedence; without a width, ADraw uses 80 columns, and without a height it
+infers the rendered rows. Trailing line breaks don't add empty rows; an empty
+file opens at 80 × 1.
 
-Choose **File > Encoding** before opening or saving. See
-[Encoding and compatibility](#encoding-and-compatibility) for the choices.
+Use **File > Save as...** to choose an ANSI file, then **Save** for subsequent
+changes. **Save selection as...** creates a separate cropped ANSI file with
+the selection's dimensions and artwork credits; it doesn't save or replace the
+full image.
 
-Use **File > Save as...** to choose an output file, then **File > Save** for
-subsequent changes.
+### Export PNG or JPEG
 
-### Save only a selection
+Choose **File > Export PNG...** or **Export JPEG...**. The active selection
+is exported if there is one; otherwise, the whole canvas is exported. Keep the
+ANSI file for editing: exporting doesn't save changes or alter the artwork,
+selection, save path, or undo history.
 
-Select an area, then choose **File > Save selection as...**.
+Exports render at 9 × 16 pixels per cell regardless of zoom. They include
+colors and attributes, with blink shown as steady text, but not the cursor,
+selection outline, sidebar, or SAUCE metadata. PNG preserves pixels; JPEG
+uses quality 90 and can soften details. Exports are limited to 32 megapixels;
+select a smaller area if needed. Missing display-font glyphs produce an error
+instead of a substituted glyph.
 
-This creates a separate, smaller ANSI file with the selected area's dimensions
-and artwork credits. It does not change your full working image or replace
-saving that image.
+### Convert from a terminal
 
-### Export a rendered image
-
-Choose **File > Export PNG...** or **File > Export JPEG...** and choose a
-filename. With an active selection, only that rectangle is exported;
-otherwise the full canvas is rendered.
-
-Images use the display font and colors at native **9 x 16 pixels per cell**,
-independent of zoom or window size. Backgrounds, bold/bright colors, inverse,
-underline, and iCE colors are included; blink is captured as steady text,
-as in the editor. Cursor, selection outlines, sidebar, and SAUCE metadata
-are not part of the image.
-
-PNG preserves pixels exactly; JPEG uses quality 90 and may soften fine details.
-Image exports do not change your ANSI save path, artwork, selection, or undo
-history, and do not mark unsaved artwork as saved. Keep the ANSI file for later
-editing. Exports are limited to 32 megapixels; select a smaller area if needed.
-Characters missing from the available display fonts produce an actionable error
-rather than a substituted glyph.
-
-### Convert from the command line
-
-`adraw my-screen.ans` opens the file in the editor. Add `--png` or `--jpeg`
-to convert ANSI files to images without opening the editor:
+`adraw my-screen.ans` opens artwork in the editor. To render without opening
+the editor:
 
 ```text
 adraw --png my-screen.ans        # writes my-screen.png
 adraw --jpeg art/*.ans           # writes art/<name>.jpg for each file
 ```
 
-Each image is written beside its source with the same name, changing only the
-extension to `.png` or `.jpg` and replacing an existing image of that name.
-Files are read as CP437; add `--utf8` for UTF-8 artwork. Put `--` before file
-names that start with `-`.
-The full canvas is rendered exactly as **File > Export** does. Each converted
-file is listed; unreadable or invalid files are reported and the command exits
-with a non-zero status after converting the rest. Run `adraw --help` for all
-options. On Windows, PowerShell and Command Prompt do not wait for ADraw to
-finish; use `Start-Process adraw -ArgumentList '--png','my-screen.ans' -Wait`
-in scripts.
+Images are written beside their sources, **replacing existing images** with
+the same names. Input defaults to CP437; add `--utf8` for UTF-8, and put `--`
+before filenames beginning with `-`. Conversion renders the full canvas as
+above. Errors are reported per file; other files are still processed and the
+command exits with a non-zero status if any fail. Run `adraw --help` for
+options. Windows PowerShell and Command Prompt don't wait for ADraw; in
+scripts use `Start-Process adraw -ArgumentList '--png','my-screen.ans' -Wait`.
 
-### Open from your file manager
+### Open from a file manager
 
-ADraw can appear as an **Open with ADraw** choice for `.ans` and `.asc` files.
-It does not replace your default program for these files.
+ADraw can be offered for `.ans` and `.asc` files without replacing your default
+application:
 
-- **Windows:** the installer adds **Open with ADraw** to the Explorer context
-  menu (the **Add "Open with ADraw" to the context menu** option, on by
-  default). On Windows 11, choose **Show more options** to see it. Uninstalling
-  removes it. The portable ZIP does not register the menu entry.
-- **Linux:** from the extracted directory, run `./install.sh`. It installs
-  ADraw for your user in `~/.local/bin`, adds a desktop menu entry, and offers
-  ADraw under **Open With** for `.ans` and `.asc` files. Add `~/.local/bin` to
-  your `PATH` to run `adraw` from a terminal. Run `./install.sh --uninstall`
-  to remove it.
-- **macOS:** after moving `ADraw.app` to Applications, choose
-  **Open With > ADraw** from a file's Finder context menu.
+- **Windows:** The installer offers **Open with ADraw** in Explorer's context
+  menu (enabled by default). On Windows 11, first choose **Show more options**.
+  Uninstall removes it; the portable ZIP doesn't register it.
+- **Linux:** Run `./install.sh` from the extracted directory to install for
+  your user and add an **Open With** choice. Add `~/.local/bin` to `PATH` for
+  terminal use. Run `./install.sh --uninstall` to remove it.
+- **macOS:** In Finder, choose **Open With > ADraw** after moving the app to
+  Applications.
 
-## SAUCE artwork credits
+## SAUCE credits
 
-The **SAUCE metadata** section holds your title, author, group, and comments.
-Enter one comment per line. If a loaded file has no SAUCE metadata, use
-**Add SAUCE metadata** in this section.
+Edit title, author, group, and comments in **SAUCE metadata**, with one
+comment per line. For a file without SAUCE, choose **Add SAUCE metadata**.
+Credits and dimensions are stored with the file, not drawn on the canvas.
+Saving preserves existing metadata along with your edits and current
+dimensions; selection saves use the cropped dimensions.
 
-SAUCE stores artwork credits and dimensions with the file, not as visible
-characters on the canvas. Existing metadata is preserved when saving, with
-your edits and the current image dimensions. Selection exports use the cropped
-dimensions.
+## Zoom, minimap, and sidebar
 
-## Zoom and scrolling
-
-Use the sidebar **zoom-out / zoom-in icons**, or click the **spyglass** and drag
-its slider left/right. **100% is the center position**; the actual-size icon
-resets it. The **View** menu offers the same commands.
+Use the sidebar zoom buttons or **View** menu. The spyglass opens a slider;
+the actual-size button returns to 100%. Zoom ranges from 50% to 400% without
+changing the artwork.
 
 | Shortcut | Action |
 | --- | --- |
-| Ctrl++ | Zoom in. |
-| Ctrl+- | Zoom out. |
-| Ctrl+0 | Return to 100%. |
+| Ctrl++ / Ctrl+- | Zoom in / out |
+| Ctrl+0 | Actual size |
 
-Zoom ranges from **50% to 400%**, preserving proportions without changing the
-saved artwork. Scrollbars appear whenever needed. At 100%, images taller than
-50 rows always have a vertical scrollbar.
+Choose **View > Show minimap** for an overview on the right. Its outline shows
+the visible canvas: click to jump, drag the outline to scroll, or drag the
+minimap's left edge to resize it. Visibility is remembered between sessions.
 
-Choose **View > Show minimap** to show or hide an overview of the entire
-canvas on the right. The outlined rectangle shows the visible portion and
-follows scrolling and zooming without tinting the artwork. Click the minimap
-to jump to a location, or drag the rectangle to scroll. The minimap can
-navigate horizontally as well as vertically. Drag its left edge to resize
-the overview; the cached artwork scales while the viewport outline stays
-in sync. Drawing updates only the changed preview region to keep editing
-responsive. Your visibility choice is remembered between sessions.
+![Minimap with an outline marking the part of the canvas currently visible](docs/images/minimap.png)
 
-## Arrange the sidebar
-
-Click the arrow on the **left** of a section heading to collapse or expand it.
-Collapsed sections show only their shaded heading row.
-
-Drag the handle at the **right edge** of a **Brush**, **Zoom**, **Colors**,
-**Attributes**, or **SAUCE metadata** heading up or down, even when collapsed.
-The highlighted line shows where the section will land. Release to finish,
-or press **Esc** to cancel. Hold near the top or bottom of the sidebar to scroll
-while dragging.
-
-Your order and collapsed sections are saved automatically and restored when
-ADraw restarts. New sections start expanded after your existing sections
-without resetting their order. Sidebar preferences do not change your artwork
-or its undo history.
+Collapse a sidebar section with its left arrow; drag its right-hand handle to
+reorder it. Press **Esc** to cancel a drag, or hold near an edge to scroll.
+Order and collapsed state are saved automatically.
 
 ## Lettering with TheDraw fonts
 
-1. Unzip your font collection, then open **Edit > TheDraw fonts...** and choose
-   **Import TDF files...**. You can import several `.tdf` files at once. ADraw
-   copies them into ADraw's application data folder and loads them automatically
-   on future launches; you can move or remove the original files afterward.
-2. Click a font in the scrollable **Imported fonts** list. Use **Search fonts**
-   to filter by name. Enter text, adjust letter spacing, and check the live
-   **Preview** beside the list. Browsing and previewing do not change your artwork.
-3. Click the canvas to choose a destination, then select **Place text**.
-   The lettering must fit; transparent cells leave existing artwork untouched.
-4. Close the font window to return to ordinary drawing and typing.
+1. Unzip your font collection. Choose **Edit > TheDraw fonts... > Import TDF
+   files...** and select one or more `.tdf` files.
+2. Choose a font, optionally filter with **Search fonts**, then enter text and
+   adjust spacing while watching the preview.
+3. Click the canvas destination and choose **Place text**. The lettering must
+   fit; transparent cells leave the artwork underneath untouched. Placement is
+   undoable and selects the lettering for further editing or saving.
 
-Block and outline fonts use your brush colors; color fonts keep their own.
-Text can span multiple lines, but only characters defined by the font are
-available (ASCII, not arbitrary Unicode). Outline fonts currently use one
-classic mixed single/double-line style.
-
-Placement is undoable and selects the lettering, ready for
-**Save selection as...**.
-
-Imported fonts remain available across restarts. Collections with the same
-filename are kept as separate copies when their contents differ; importing
-the same unchanged file again reuses its copy. Files that cannot be imported
-or restored produce an error message.
-
-Fonts are stored under `%APPDATA%\ADraw\data\fonts` on Windows,
-`~/.local/share/adraw/fonts` on Linux (or `$XDG_DATA_HOME/adraw/fonts`),
-and `~/Library/Application Support/ADraw/fonts` on macOS.
-
-Already-placed lettering is saved as ordinary artwork and does not require
-the font to view.
-TDF font collections are not included with ADraw; the IBM VGA display font is
+Block and outline fonts use brush colors; color fonts keep their own. Text can
+span lines, but only characters defined in the font are available (ASCII, not
+arbitrary Unicode). Outline fonts use one classic mixed single/double-line
+style. TDF collections aren't included with ADraw; the IBM VGA display font is
 bundled separately.
 
-## Encoding and compatibility
+Imported files are copied into application data and loaded on future launches;
+you can move or remove the originals. Identical reimports reuse the saved copy,
+while files with the same name but different contents are kept separately.
+Import or restore failures are reported. Placed lettering is ordinary artwork
+and doesn't need the font to be viewed.
 
-- **CP437** is for classic ANSI/BBS artwork; **UTF-8** supports Unicode text.
-  Select the encoding under **File > Encoding** before opening or saving.
-- ANSI files support 16-color, 256-color, and RGB colors. Your intended viewer
-  must also support the colors and encoding you choose.
-- Some CP437 graphical control characters cannot be saved safely in CP437 ANSI
-  files. Choose UTF-8 when the editor reports this.
-- Unicode characters outside CP437 use fallback fonts.
+Font locations: `%APPDATA%\ADraw\data\fonts` on Windows,
+`~/.local/share/adraw/fonts` on Linux (or `$XDG_DATA_HOME/adraw/fonts`), and
+`~/Library/Application Support/ADraw/fonts` on macOS.
 
 For source builds, testing, architecture, and credits, see the
 [Developer guide](https://github.com/mikehodgson/adraw/blob/main/DEVELOPERS.md).
